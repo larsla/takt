@@ -348,3 +348,24 @@ func (c *Client) recordPoller(ctx context.Context, domain, taskList string, t ap
 	req := &api.RecordPollerRequest{Domain: domain, TaskList: taskList, TaskListType: t, Identity: identity}
 	_ = c.call(ctx, api.MethodRecordPoller, req, nil)
 }
+
+// ListenQueries answers queries for workflows on a task list. Workers of
+// the same task list share the load through a queue group.
+func (c *Client) ListenQueries(domain, taskList string, handle func(context.Context, *api.WorkerQueryRequest) *api.WorkerQueryResponse) (func(), error) {
+	sub, err := c.nc.QueueSubscribe(api.QuerySubject(domain, taskList), "takt-workers", func(m *nats.Msg) {
+		go func() {
+			var req api.WorkerQueryRequest
+			if json.Unmarshal(m.Data, &req) != nil || req.Query == nil || req.Execution == nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			b, _ := json.Marshal(handle(ctx, &req))
+			_ = m.Respond(b)
+		}()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = sub.Unsubscribe() }, nil
+}

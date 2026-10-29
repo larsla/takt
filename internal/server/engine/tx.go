@@ -16,6 +16,11 @@ type tx struct {
 	outbox  []*OutboxItem
 	changed bool
 	visible bool
+	// afterDecisions are appended once all decisions of a task are applied.
+	afterDecisions []*api.HistoryEvent
+	// continued is set when the run continued as new; update starts the
+	// next run before returning.
+	continued bool
 }
 
 func (e *Engine) newTx(s *State) *tx {

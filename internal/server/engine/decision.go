@@ -136,6 +136,10 @@ func (t *tx) completeDecision(d *DecisionInfo, req *api.RespondDecisionTaskCompl
 	if !s.Running() {
 		return
 	}
+	for _, ev := range t.afterDecisions {
+		t.add(ev)
+	}
+	t.afterDecisions = nil
 	if t.flushBuffered() > 0 {
 		need = true
 	}
@@ -635,4 +639,5 @@ func (t *tx) continueAsNew(a *api.ContinueAsNewWorkflowExecutionDecisionAttribut
 	s.NewRunID = newRunID
 	s.Continue = a
 	t.closeRun(api.CloseStatusContinuedAsNew, ev.EventID)
+	t.continued = true
 }

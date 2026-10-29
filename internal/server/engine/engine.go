@@ -251,6 +251,13 @@ func (e *Engine) update(ctx context.Context, domain, workflowID, runID string, f
 			e.log.Warn("finalize failed", "key", key, "err", err)
 			return s, nil
 		}
+		if t.continued {
+			// Create the next run now so callers can follow the chain right
+			// away. The close transfer does the same if this fails.
+			if err := e.startContinuation(ctx, s); err != nil {
+				e.log.Warn("start continuation", "key", key, "err", err)
+			}
+		}
 		if final == nil {
 			return s, nil
 		}

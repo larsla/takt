@@ -124,12 +124,13 @@ func (t *tx) requestCancelActivity(activityID string, completedID int64) bool {
 		ai.CancelRequestEventID = ev.EventID
 		return false
 	}
+	// Written after all events of this decision task so they stay together.
 	canceled := t.event(api.EventTypeActivityTaskCanceled)
 	canceled.ActivityTaskCanceledEventAttributes = &api.ActivityTaskCanceledEventAttributes{
 		ScheduledEventID:             ai.ScheduleID,
 		LatestCancelRequestedEventID: ev.EventID,
 	}
-	t.add(canceled)
+	t.afterDecisions = append(t.afterDecisions, canceled)
 	delete(t.s.Activities, ai.ScheduleID)
 	return true
 }
