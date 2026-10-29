@@ -66,7 +66,32 @@ type QueryWorkflowWithOptionsResponse struct {
 }
 
 // Client starts and manages workflows.
-type Client struct {
+type Client interface {
+	StartWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecution, error)
+	ExecuteWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (WorkflowRun, error)
+	GetWorkflow(ctx context.Context, workflowID, runID string) WorkflowRun
+	SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error
+	SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, signalArg interface{},
+		options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecution, error)
+	CancelWorkflow(ctx context.Context, workflowID, runID string) error
+	TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details []byte) error
+	GetWorkflowHistory(ctx context.Context, workflowID, runID string, isLongPoll bool, filterType api.HistoryEventFilterType) HistoryEventIterator
+	CompleteActivity(ctx context.Context, taskToken []byte, result interface{}, err error) error
+	CompleteActivityByID(ctx context.Context, domain, workflowID, runID, activityID string, result interface{}, err error) error
+	RecordActivityHeartbeat(ctx context.Context, taskToken []byte, details ...interface{}) error
+	RecordActivityHeartbeatByID(ctx context.Context, domain, workflowID, runID, activityID string, details ...interface{}) error
+	ListClosedWorkflow(ctx context.Context, request *api.ListClosedWorkflowExecutionsRequest) (*api.ListClosedWorkflowExecutionsResponse, error)
+	ListOpenWorkflow(ctx context.Context, request *api.ListOpenWorkflowExecutionsRequest) (*api.ListOpenWorkflowExecutionsResponse, error)
+	ListWorkflow(ctx context.Context, request *api.ListWorkflowExecutionsRequest) (*api.ListWorkflowExecutionsResponse, error)
+	ScanWorkflow(ctx context.Context, request *api.ListWorkflowExecutionsRequest) (*api.ListWorkflowExecutionsResponse, error)
+	CountWorkflow(ctx context.Context, request *api.CountWorkflowExecutionsRequest) (*api.CountWorkflowExecutionsResponse, error)
+	QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (Value, error)
+	QueryWorkflowWithOptions(ctx context.Context, request *QueryWorkflowWithOptionsRequest) (*QueryWorkflowWithOptionsResponse, error)
+	DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*api.DescribeWorkflowExecutionResponse, error)
+	DescribeTaskList(ctx context.Context, taskList string, taskListType api.TaskListType) (*api.DescribeTaskListResponse, error)
+}
+
+type workflowClient struct {
 	service  api.Service
 	domain   string
 	dc       DataConverter
@@ -75,7 +100,7 @@ type Client struct {
 }
 
 // NewClient creates a client for a domain.
-func NewClient(service api.Service, domain string, options *ClientOptions) *Client {
+func NewClient(service api.Service, domain string, options *ClientOptions) Client {
 	var o ClientOptions
 	if options != nil {
 		o = *options
@@ -87,10 +112,10 @@ func NewClient(service api.Service, domain string, options *ClientOptions) *Clie
 	if o.MetricsScope == nil {
 		o.MetricsScope = tally.NoopScope
 	}
-	return &Client{service: service, domain: domain, dc: orDefault(o.DataConverter), identity: o.Identity, scope: o.MetricsScope}
+	return &workflowClient{service: service, domain: domain, dc: orDefault(o.DataConverter), identity: o.Identity, scope: o.MetricsScope}
 }
 
-func (c *Client) startRequest(options StartWorkflowOptions, workflow interface{}, args []interface{}) (*api.StartWorkflowExecutionRequest, error) {
+func (c *workflowClient) startRequest(options StartWorkflowOptions, workflow interface{}, args []interface{}) (*api.StartWorkflowExecutionRequest, error) {
 	if options.TaskList == "" {
 		return nil, errors.New("missing TaskList")
 	}
@@ -159,7 +184,7 @@ func (c *Client) startRequest(options StartWorkflowOptions, workflow interface{}
 }
 
 // StartWorkflow starts a workflow and returns its execution.
-func (c *Client) StartWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecution, error) {
+func (c *workflowClient) StartWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecution, error) {
 	req, err := c.startRequest(options, workflow, args)
 	if err != nil {
 		return nil, err
@@ -173,7 +198,7 @@ func (c *Client) StartWorkflow(ctx context.Context, options StartWorkflowOptions
 
 // ExecuteWorkflow starts a workflow and returns a WorkflowRun to wait on.
 // If the workflow is already running with the same ID, it returns that run.
-func (c *Client) ExecuteWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (WorkflowRun, error) {
+func (c *workflowClient) ExecuteWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (WorkflowRun, error) {
 	exec, err := c.StartWorkflow(ctx, options, workflow, args...)
 	if err != nil {
 		var already *api.WorkflowExecutionAlreadyStartedError
@@ -186,12 +211,12 @@ func (c *Client) ExecuteWorkflow(ctx context.Context, options StartWorkflowOptio
 }
 
 // GetWorkflow returns a WorkflowRun for an existing workflow.
-func (c *Client) GetWorkflow(_ context.Context, workflowID, runID string) WorkflowRun {
+func (c *workflowClient) GetWorkflow(_ context.Context, workflowID, runID string) WorkflowRun {
 	return &workflowRunImpl{client: c, id: workflowID, runID: runID}
 }
 
 type workflowRunImpl struct {
-	client *Client
+	client *workflowClient
 	id     string
 	runID  string
 }
@@ -234,7 +259,7 @@ func (r *workflowRunImpl) Get(ctx context.Context, valuePtr interface{}) error {
 
 // closeEvent long-polls until the run closes. A continued run may take a
 // moment to appear, so not-found is retried for a while when following one.
-func (c *Client) closeEvent(ctx context.Context, workflowID, runID string, continued bool) (*api.HistoryEvent, error) {
+func (c *workflowClient) closeEvent(ctx context.Context, workflowID, runID string, continued bool) (*api.HistoryEvent, error) {
 	notFoundUntil := time.Now().Add(10 * time.Second)
 	for {
 		resp, err := c.service.GetWorkflowExecutionHistory(ctx, &api.GetWorkflowExecutionHistoryRequest{
@@ -265,7 +290,7 @@ func (c *Client) closeEvent(ctx context.Context, workflowID, runID string, conti
 }
 
 // SignalWorkflow sends a signal. An empty runID targets the current run.
-func (c *Client) SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error {
+func (c *workflowClient) SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error {
 	input, err := encodeArgs(c.dc, []interface{}{arg})
 	if err != nil {
 		return err
@@ -281,7 +306,7 @@ func (c *Client) SignalWorkflow(ctx context.Context, workflowID, runID, signalNa
 }
 
 // SignalWithStartWorkflow signals a workflow, starting it first if needed.
-func (c *Client) SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, signalArg interface{},
+func (c *workflowClient) SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, signalArg interface{},
 	options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecution, error) {
 	options.ID = workflowID
 	req, err := c.startRequest(options, workflow, workflowArgs)
@@ -318,7 +343,7 @@ func (c *Client) SignalWithStartWorkflow(ctx context.Context, workflowID, signal
 }
 
 // CancelWorkflow requests cancellation of a workflow.
-func (c *Client) CancelWorkflow(ctx context.Context, workflowID, runID string) error {
+func (c *workflowClient) CancelWorkflow(ctx context.Context, workflowID, runID string) error {
 	return c.service.RequestCancelWorkflowExecution(ctx, &api.RequestCancelWorkflowExecutionRequest{
 		Domain:            c.domain,
 		WorkflowExecution: &api.WorkflowExecution{WorkflowID: workflowID, RunID: runID},
@@ -328,7 +353,7 @@ func (c *Client) CancelWorkflow(ctx context.Context, workflowID, runID string) e
 }
 
 // TerminateWorkflow terminates a workflow right away.
-func (c *Client) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details []byte) error {
+func (c *workflowClient) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details []byte) error {
 	return c.service.TerminateWorkflowExecution(ctx, &api.TerminateWorkflowExecutionRequest{
 		Domain:            c.domain,
 		WorkflowExecution: &api.WorkflowExecution{WorkflowID: workflowID, RunID: runID},
@@ -340,13 +365,13 @@ func (c *Client) TerminateWorkflow(ctx context.Context, workflowID, runID, reaso
 
 // GetWorkflowHistory iterates over a workflow's history. With isLongPoll it
 // waits for new events until the workflow closes.
-func (c *Client) GetWorkflowHistory(ctx context.Context, workflowID, runID string, isLongPoll bool, filterType api.HistoryEventFilterType) HistoryEventIterator {
+func (c *workflowClient) GetWorkflowHistory(ctx context.Context, workflowID, runID string, isLongPoll bool, filterType api.HistoryEventFilterType) HistoryEventIterator {
 	return &historyIterator{ctx: ctx, c: c, exec: &api.WorkflowExecution{WorkflowID: workflowID, RunID: runID}, longPoll: isLongPoll, filter: filterType}
 }
 
 type historyIterator struct {
 	ctx      context.Context
-	c        *Client
+	c        *workflowClient
 	exec     *api.WorkflowExecution
 	longPoll bool
 	filter   api.HistoryEventFilterType
@@ -395,7 +420,7 @@ func (it *historyIterator) Next() (*api.HistoryEvent, error) {
 
 // CompleteActivity reports the result of an activity that returned
 // ErrResultPending. A CanceledError reports cancellation.
-func (c *Client) CompleteActivity(ctx context.Context, taskToken []byte, result interface{}, err error) error {
+func (c *workflowClient) CompleteActivity(ctx context.Context, taskToken []byte, result interface{}, err error) error {
 	if len(taskToken) == 0 {
 		return errors.New("invalid task token provided")
 	}
@@ -417,7 +442,7 @@ func (c *Client) CompleteActivity(ctx context.Context, taskToken []byte, result 
 }
 
 // CompleteActivityByID is CompleteActivity addressed by activity ID.
-func (c *Client) CompleteActivityByID(ctx context.Context, domain, workflowID, runID, activityID string, result interface{}, err error) error {
+func (c *workflowClient) CompleteActivityByID(ctx context.Context, domain, workflowID, runID, activityID string, result interface{}, err error) error {
 	if activityID == "" || workflowID == "" || domain == "" {
 		return errors.New("empty activity or workflow id or domainName")
 	}
@@ -443,7 +468,7 @@ func (c *Client) CompleteActivityByID(ctx context.Context, domain, workflowID, r
 	})
 }
 
-func (c *Client) encodeResult(result interface{}) ([]byte, error) {
+func (c *workflowClient) encodeResult(result interface{}) ([]byte, error) {
 	if result == nil {
 		return nil, nil
 	}
@@ -451,7 +476,7 @@ func (c *Client) encodeResult(result interface{}) ([]byte, error) {
 }
 
 // RecordActivityHeartbeat records a heartbeat for an activity.
-func (c *Client) RecordActivityHeartbeat(ctx context.Context, taskToken []byte, details ...interface{}) error {
+func (c *workflowClient) RecordActivityHeartbeat(ctx context.Context, taskToken []byte, details ...interface{}) error {
 	data, err := encodeArgs(c.dc, details)
 	if err != nil {
 		return err
@@ -464,7 +489,7 @@ func (c *Client) RecordActivityHeartbeat(ctx context.Context, taskToken []byte, 
 }
 
 // RecordActivityHeartbeatByID records a heartbeat addressed by activity ID.
-func (c *Client) RecordActivityHeartbeatByID(ctx context.Context, domain, workflowID, runID, activityID string, details ...interface{}) error {
+func (c *workflowClient) RecordActivityHeartbeatByID(ctx context.Context, domain, workflowID, runID, activityID string, details ...interface{}) error {
 	data, err := encodeArgs(c.dc, details)
 	if err != nil {
 		return err
@@ -479,7 +504,7 @@ func (c *Client) RecordActivityHeartbeatByID(ctx context.Context, domain, workfl
 }
 
 // ListClosedWorkflow lists closed workflows of the client's domain.
-func (c *Client) ListClosedWorkflow(ctx context.Context, request *api.ListClosedWorkflowExecutionsRequest) (*api.ListClosedWorkflowExecutionsResponse, error) {
+func (c *workflowClient) ListClosedWorkflow(ctx context.Context, request *api.ListClosedWorkflowExecutionsRequest) (*api.ListClosedWorkflowExecutionsResponse, error) {
 	if request.Domain == "" {
 		request.Domain = c.domain
 	}
@@ -487,7 +512,7 @@ func (c *Client) ListClosedWorkflow(ctx context.Context, request *api.ListClosed
 }
 
 // ListOpenWorkflow lists open workflows of the client's domain.
-func (c *Client) ListOpenWorkflow(ctx context.Context, request *api.ListOpenWorkflowExecutionsRequest) (*api.ListOpenWorkflowExecutionsResponse, error) {
+func (c *workflowClient) ListOpenWorkflow(ctx context.Context, request *api.ListOpenWorkflowExecutionsRequest) (*api.ListOpenWorkflowExecutionsResponse, error) {
 	if request.Domain == "" {
 		request.Domain = c.domain
 	}
@@ -495,7 +520,7 @@ func (c *Client) ListOpenWorkflow(ctx context.Context, request *api.ListOpenWork
 }
 
 // ListWorkflow lists workflows matching a query.
-func (c *Client) ListWorkflow(ctx context.Context, request *api.ListWorkflowExecutionsRequest) (*api.ListWorkflowExecutionsResponse, error) {
+func (c *workflowClient) ListWorkflow(ctx context.Context, request *api.ListWorkflowExecutionsRequest) (*api.ListWorkflowExecutionsResponse, error) {
 	if request.Domain == "" {
 		request.Domain = c.domain
 	}
@@ -503,12 +528,12 @@ func (c *Client) ListWorkflow(ctx context.Context, request *api.ListWorkflowExec
 }
 
 // ScanWorkflow is ListWorkflow without ordering guarantees.
-func (c *Client) ScanWorkflow(ctx context.Context, request *api.ListWorkflowExecutionsRequest) (*api.ListWorkflowExecutionsResponse, error) {
+func (c *workflowClient) ScanWorkflow(ctx context.Context, request *api.ListWorkflowExecutionsRequest) (*api.ListWorkflowExecutionsResponse, error) {
 	return c.ListWorkflow(ctx, request)
 }
 
 // CountWorkflow counts workflows matching a query.
-func (c *Client) CountWorkflow(ctx context.Context, request *api.CountWorkflowExecutionsRequest) (*api.CountWorkflowExecutionsResponse, error) {
+func (c *workflowClient) CountWorkflow(ctx context.Context, request *api.CountWorkflowExecutionsRequest) (*api.CountWorkflowExecutionsResponse, error) {
 	if request.Domain == "" {
 		request.Domain = c.domain
 	}
@@ -516,7 +541,7 @@ func (c *Client) CountWorkflow(ctx context.Context, request *api.CountWorkflowEx
 }
 
 // QueryWorkflow queries a workflow.
-func (c *Client) QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (Value, error) {
+func (c *workflowClient) QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (Value, error) {
 	resp, err := c.QueryWorkflowWithOptions(ctx, &QueryWorkflowWithOptionsRequest{WorkflowID: workflowID, RunID: runID, QueryType: queryType, Args: args})
 	if err != nil {
 		return nil, err
@@ -525,7 +550,7 @@ func (c *Client) QueryWorkflow(ctx context.Context, workflowID, runID, queryType
 }
 
 // QueryWorkflowWithOptions queries a workflow with a reject condition.
-func (c *Client) QueryWorkflowWithOptions(ctx context.Context, request *QueryWorkflowWithOptionsRequest) (*QueryWorkflowWithOptionsResponse, error) {
+func (c *workflowClient) QueryWorkflowWithOptions(ctx context.Context, request *QueryWorkflowWithOptionsRequest) (*QueryWorkflowWithOptionsResponse, error) {
 	input, err := encodeArgs(c.dc, request.Args)
 	if err != nil {
 		return nil, err
@@ -549,41 +574,47 @@ func (c *Client) QueryWorkflowWithOptions(ctx context.Context, request *QueryWor
 }
 
 // DescribeWorkflowExecution describes a run.
-func (c *Client) DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*api.DescribeWorkflowExecutionResponse, error) {
+func (c *workflowClient) DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*api.DescribeWorkflowExecutionResponse, error) {
 	return c.service.DescribeWorkflowExecution(ctx, &api.DescribeWorkflowExecutionRequest{
 		Domain: c.domain, Execution: &api.WorkflowExecution{WorkflowID: workflowID, RunID: runID},
 	})
 }
 
 // DescribeTaskList describes the pollers of a task list.
-func (c *Client) DescribeTaskList(ctx context.Context, taskList string, taskListType api.TaskListType) (*api.DescribeTaskListResponse, error) {
+func (c *workflowClient) DescribeTaskList(ctx context.Context, taskList string, taskListType api.TaskListType) (*api.DescribeTaskListResponse, error) {
 	return c.service.DescribeTaskList(ctx, &api.DescribeTaskListRequest{
 		Domain: c.domain, TaskList: &api.TaskList{Name: taskList}, TaskListType: taskListType, IncludeTaskListStatus: true,
 	})
 }
 
 // DomainClient manages domains.
-type DomainClient struct {
+type DomainClient interface {
+	Register(ctx context.Context, request *api.RegisterDomainRequest) error
+	Describe(ctx context.Context, name string) (*api.DescribeDomainResponse, error)
+	Update(ctx context.Context, request *api.UpdateDomainRequest) error
+}
+
+type domainClient struct {
 	service api.Service
 }
 
 // NewDomainClient creates a DomainClient.
-func NewDomainClient(service api.Service, _ *ClientOptions) *DomainClient {
-	return &DomainClient{service: service}
+func NewDomainClient(service api.Service, _ *ClientOptions) DomainClient {
+	return &domainClient{service: service}
 }
 
 // Register registers a domain.
-func (d *DomainClient) Register(ctx context.Context, request *api.RegisterDomainRequest) error {
+func (d *domainClient) Register(ctx context.Context, request *api.RegisterDomainRequest) error {
 	return d.service.RegisterDomain(ctx, request)
 }
 
 // Describe describes a domain.
-func (d *DomainClient) Describe(ctx context.Context, name string) (*api.DescribeDomainResponse, error) {
+func (d *domainClient) Describe(ctx context.Context, name string) (*api.DescribeDomainResponse, error) {
 	return d.service.DescribeDomain(ctx, &api.DescribeDomainRequest{Name: name})
 }
 
 // Update updates a domain.
-func (d *DomainClient) Update(ctx context.Context, request *api.UpdateDomainRequest) error {
+func (d *domainClient) Update(ctx context.Context, request *api.UpdateDomainRequest) error {
 	_, err := d.service.UpdateDomain(ctx, request)
 	return err
 }

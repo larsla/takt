@@ -273,7 +273,7 @@ func (c *Client) poll(ctx context.Context, domain, taskList string, t api.TaskLi
 	}
 	deadline := time.Now().Add(c.opts.PollTimeout)
 	for ctx.Err() == nil {
-		wait := min(time.Until(deadline), 5*time.Second)
+		wait := min(time.Until(deadline), time.Second)
 		if wait <= 0 {
 			return false, nil
 		}

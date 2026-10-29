@@ -86,3 +86,13 @@ func ReplayWorkflowHistory(logger *zap.Logger, history *api.History) error {
 func ReplayWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string) error {
 	return (&WorkflowReplayer{registry: globalRegistry}).ReplayWorkflowHistoryFromJSONFile(logger, jsonfileName)
 }
+
+// ReplayWorkflowExecution fetches a workflow's history from the service and
+// replays it.
+func (r *WorkflowReplayer) ReplayWorkflowExecution(ctx context.Context, service api.Service, logger *zap.Logger, domain string, execution WorkflowExecution) error {
+	events, err := fetchHistory(ctx, service, domain, &api.WorkflowExecution{WorkflowID: execution.ID, RunID: execution.RunID})
+	if err != nil {
+		return err
+	}
+	return r.ReplayWorkflowHistory(logger, &api.History{Events: events})
+}

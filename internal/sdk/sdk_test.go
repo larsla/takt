@@ -13,7 +13,7 @@ const testTaskList = "sdk-tl"
 type testEnv struct {
 	t      *testing.T
 	stack  *servertest.Env
-	client *Client
+	client Client
 	ctx    context.Context
 }
 
