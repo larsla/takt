@@ -16,7 +16,10 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/larsla/takt/api"
 	"github.com/larsla/takt/internal/embeddednats"
+	"github.com/larsla/takt/internal/server"
+	"github.com/larsla/takt/internal/server/engine"
 	"github.com/larsla/takt/internal/server/migrations"
 	"github.com/larsla/takt/web"
 )
@@ -80,6 +83,7 @@ type serverConfig struct {
 	uiAddr       string
 	replicas     int
 	debug        bool
+	devDomain    string
 }
 
 func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfig, error) {
@@ -94,6 +98,9 @@ func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfi
 	fs.StringVar(&cfg.uiAddr, "ui-addr", "127.0.0.1:8088", "web UI listen address (empty disables the UI)")
 	fs.IntVar(&cfg.replicas, "replicas", 0, "replica count for streams and buckets (0: 1)")
 	fs.BoolVar(&cfg.debug, "debug", false, "verbose logging")
+	if mode == "dev" {
+		fs.StringVar(&cfg.devDomain, "domain", "default", "domain to register on startup")
+	}
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -152,6 +159,18 @@ func runServer(ctx context.Context, mode string, args []string, stderr io.Writer
 	}
 	log.Info("schema ready", "version", v)
 
+	takt, err := server.Start(ctx, server.Config{NC: nc, JS: js, Logger: log})
+	if err != nil {
+		return err
+	}
+	defer takt.Stop()
+	if mode == "dev" {
+		if err := ensureDomain(ctx, takt.Engine(), cfg.devDomain); err != nil {
+			return err
+		}
+		log.Info("dev domain ready", "domain", cfg.devDomain)
+	}
+
 	info := readyInfo{NATSURL: natsURL}
 	var srv *http.Server
 	errc := make(chan error, 1)
@@ -188,4 +207,14 @@ func runServer(ctx context.Context, mode string, args []string, stderr io.Writer
 		}
 	}
 	return nil
+}
+
+// ensureDomain registers a domain unless it exists.
+func ensureDomain(ctx context.Context, e *engine.Engine, name string) error {
+	err := e.RegisterDomain(ctx, &api.RegisterDomainRequest{Name: name, Description: "registered by takt dev"})
+	var exists *api.DomainAlreadyExistsError
+	if errors.As(err, &exists) {
+		return nil
+	}
+	return err
 }

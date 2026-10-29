@@ -131,7 +131,7 @@ func apply(ctx context.Context, js jetstream.JetStream, ms []Migration, opts Opt
 			rev, err = meta.Update(ctx, versionKey, val, rev)
 		}
 		if err != nil {
-			if !errors.Is(err, jetstream.ErrKeyExists) && !isWrongSequence(err) {
+			if !isWrongSequence(err) {
 				return current, fmt.Errorf("record version %d: %w", m.Version, err)
 			}
 			if current, rev, err = readVersion(ctx, meta); err != nil {
@@ -200,7 +200,14 @@ func readVersion(ctx context.Context, meta jetstream.KeyValue) (int, uint64, err
 	return v, e.Revision(), nil
 }
 
+// isWrongSequence reports a lost compare-and-set. Replicated streams use a
+// different error code than single-replica ones.
 func isWrongSequence(err error) bool {
+	if errors.Is(err, jetstream.ErrKeyExists) || errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
+		return true
+	}
 	var apiErr *jetstream.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence
+	return errors.As(err, &apiErr) &&
+		(apiErr.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
+			apiErr.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant)
 }
