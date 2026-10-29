@@ -1,0 +1,25 @@
+package views
+
+templ Layout(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · takt</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/htmx.min.js" defer></script>
+		</head>
+		<body class="min-h-screen">
+			<header class="border-b">
+				<nav class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3 text-sm">
+					<a href="/" class="font-semibold">takt</a>
+					<a href="/" class="text-muted-foreground hover:text-foreground">Cluster</a>
+				</nav>
+			</header>
+			<main class="mx-auto max-w-6xl px-4 py-6">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}

@@ -1,0 +1,24 @@
+package ui
+
+// Card markup follows shadcn-htmx's card component.
+
+templ Card() {
+	<div data-slot="card" class="flex flex-col gap-6 rounded-xl border bg-card py-6 text-card-foreground shadow-sm">
+		{ children... }
+	</div>
+}
+
+templ CardHeader(title, description string) {
+	<div data-slot="card-header" class="@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-2 px-6">
+		<div data-slot="card-title" class="leading-none font-semibold">{ title }</div>
+		if description != "" {
+			<div data-slot="card-description" class="text-sm text-muted-foreground">{ description }</div>
+		}
+	</div>
+}
+
+templ CardContent() {
+	<div data-slot="card-content" class="px-6">
+		{ children... }
+	</div>
+}

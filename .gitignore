@@ -1,0 +1,5 @@
+/bin/
+/data/
+/takt
+coverage.out
+coverage.filtered.out

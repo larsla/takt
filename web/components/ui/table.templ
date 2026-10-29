@@ -1,0 +1,39 @@
+package ui
+
+// Table markup follows shadcn-htmx's table component.
+
+templ Table() {
+	<div class="relative w-full overflow-auto">
+		<table data-slot="table" class="w-full caption-bottom text-sm">
+			{ children... }
+		</table>
+	</div>
+}
+
+templ TableHeader(columns ...string) {
+	<thead data-slot="table-header" class="[&_tr]:border-b">
+		<tr data-slot="table-row" class="border-b">
+			for _, c := range columns {
+				<th scope="col" data-slot="table-head" class="h-10 px-2 text-left align-middle font-medium text-muted-foreground">{ c }</th>
+			}
+		</tr>
+	</thead>
+}
+
+templ TableBody() {
+	<tbody data-slot="table-body" class="[&_tr:last-child]:border-0">
+		{ children... }
+	</tbody>
+}
+
+templ TableRow() {
+	<tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50">
+		{ children... }
+	</tr>
+}
+
+templ TableCell() {
+	<td data-slot="table-cell" class="p-2 align-middle">
+		{ children... }
+	</td>
+}

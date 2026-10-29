@@ -1,0 +1,39 @@
+{
+  "description": "Initial streams, KV buckets and object store",
+  "streams": [
+    {
+      "name": "TAKT_HISTORY",
+      "description": "Workflow history, one message per event batch",
+      "subjects": ["takt.hist.>"],
+      "retention": "limits",
+      "storage": "file",
+      "discard": "old"
+    },
+    {
+      "name": "TAKT_TASKS",
+      "description": "Decision and activity task stubs per task list",
+      "subjects": ["takt.task.>"],
+      "retention": "workqueue",
+      "storage": "file",
+      "duplicate_window": 120000000000
+    },
+    {
+      "name": "TAKT_TIMERS",
+      "description": "Scheduled timer messages and their fired copies",
+      "subjects": ["takt.timer.sched.>", "takt.timer.fire.>"],
+      "retention": "workqueue",
+      "storage": "file",
+      "allow_msg_schedules": true,
+      "duplicate_window": 120000000000
+    }
+  ],
+  "kv": [
+    {"bucket": "takt_domains", "description": "Domain configuration", "history": 1, "storage": "file"},
+    {"bucket": "takt_executions", "description": "Workflow mutable state", "history": 1, "storage": "file"},
+    {"bucket": "takt_visibility", "description": "Workflow listing records", "history": 1, "storage": "file"},
+    {"bucket": "takt_pollers", "description": "Task list poller heartbeats", "history": 1, "storage": "file", "ttl": 60000000000}
+  ],
+  "object_stores": [
+    {"bucket": "takt_payloads", "description": "Payloads too large to inline in history", "storage": "file"}
+  ]
+}

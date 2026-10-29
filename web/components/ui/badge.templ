@@ -1,0 +1,23 @@
+package ui
+
+// Badge markup follows shadcn-htmx's badge component.
+
+const badgeBase = "inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap"
+
+func badgeClass(variant string) string {
+	switch variant {
+	case "secondary":
+		return badgeBase + " bg-secondary text-secondary-foreground"
+	case "destructive":
+		return badgeBase + " bg-destructive text-white dark:bg-destructive/60"
+	case "outline":
+		return badgeBase + " border-border text-foreground"
+	default:
+		return badgeBase + " bg-primary text-primary-foreground"
+	}
+}
+
+// Badge renders a pill. Variant is default, secondary, destructive or outline.
+templ Badge(variant, label string) {
+	<span data-slot="badge" data-variant={ variant } class={ badgeClass(variant) }>{ label }</span>
+}
