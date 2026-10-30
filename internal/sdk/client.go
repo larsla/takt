@@ -81,6 +81,36 @@ type QueryWorkflowWithOptionsRequest struct {
 	QueryType            string
 	Args                 []interface{}
 	QueryRejectCondition *api.QueryRejectCondition
+	// QueryConsistencyLevel is accepted for compatibility and ignored.
+	QueryConsistencyLevel *api.QueryConsistencyLevel
+}
+
+// QueryConsistencyLevel is accepted for compatibility: takt has one
+// cluster, so every level reads the same state.
+type QueryConsistencyLevel int
+
+const (
+	QueryConsistencyLevelUnspecified QueryConsistencyLevel = iota
+	QueryConsistencyLevelEventual
+	QueryConsistencyLevelStrong
+)
+
+// GetWorkflowHistoryWithOptionsRequest is the request of
+// GetWorkflowHistoryWithOptions.
+type GetWorkflowHistoryWithOptionsRequest struct {
+	WorkflowID            string
+	RunID                 string
+	IsLongPoll            bool
+	FilterType            api.HistoryEventFilterType
+	QueryConsistencyLevel QueryConsistencyLevel
+}
+
+// DescribeWorkflowExecutionWithOptionsRequest is the request of
+// DescribeWorkflowExecutionWithOptions.
+type DescribeWorkflowExecutionWithOptionsRequest struct {
+	WorkflowID            string
+	RunID                 string
+	QueryConsistencyLevel QueryConsistencyLevel
 }
 
 // QueryWorkflowWithOptionsResponse is the response of QueryWorkflowWithOptions.
@@ -92,14 +122,20 @@ type QueryWorkflowWithOptionsResponse struct {
 // Client starts and manages workflows.
 type Client interface {
 	StartWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecution, error)
+	// StartWorkflowAsync starts a workflow; takt has no start queue, so it
+	// is StartWorkflow without the run ID.
+	StartWorkflowAsync(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecutionAsync, error)
 	ExecuteWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (WorkflowRun, error)
 	GetWorkflow(ctx context.Context, workflowID, runID string) WorkflowRun
 	SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error
 	SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, signalArg interface{},
 		options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecution, error)
+	SignalWithStartWorkflowAsync(ctx context.Context, workflowID, signalName string, signalArg interface{},
+		options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecutionAsync, error)
 	CancelWorkflow(ctx context.Context, workflowID, runID string, opts ...Option) error
 	TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details []byte) error
 	GetWorkflowHistory(ctx context.Context, workflowID, runID string, isLongPoll bool, filterType api.HistoryEventFilterType) HistoryEventIterator
+	GetWorkflowHistoryWithOptions(ctx context.Context, request *GetWorkflowHistoryWithOptionsRequest) HistoryEventIterator
 	CompleteActivity(ctx context.Context, taskToken []byte, result interface{}, err error) error
 	CompleteActivityByID(ctx context.Context, domain, workflowID, runID, activityID string, result interface{}, err error) error
 	RecordActivityHeartbeat(ctx context.Context, taskToken []byte, details ...interface{}) error
@@ -112,6 +148,7 @@ type Client interface {
 	QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (Value, error)
 	QueryWorkflowWithOptions(ctx context.Context, request *QueryWorkflowWithOptionsRequest) (*QueryWorkflowWithOptionsResponse, error)
 	DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*api.DescribeWorkflowExecutionResponse, error)
+	DescribeWorkflowExecutionWithOptions(ctx context.Context, request *DescribeWorkflowExecutionWithOptionsRequest) (*api.DescribeWorkflowExecutionResponse, error)
 	DescribeTaskList(ctx context.Context, taskList string, taskListType api.TaskListType) (*api.DescribeTaskListResponse, error)
 }
 
@@ -433,6 +470,37 @@ func (c *workflowClient) TerminateWorkflow(ctx context.Context, workflowID, runI
 
 // GetWorkflowHistory iterates over a workflow's history. With isLongPoll it
 // waits for new events until the workflow closes.
+// StartWorkflowAsync starts a workflow and returns its ID.
+func (c *workflowClient) StartWorkflowAsync(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecutionAsync, error) {
+	exec, err := c.StartWorkflow(ctx, options, workflow, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &WorkflowExecutionAsync{ID: exec.ID}, nil
+}
+
+// SignalWithStartWorkflowAsync is SignalWithStartWorkflow returning only
+// the workflow ID.
+func (c *workflowClient) SignalWithStartWorkflowAsync(ctx context.Context, workflowID, signalName string, signalArg interface{},
+	options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecutionAsync, error) {
+	exec, err := c.SignalWithStartWorkflow(ctx, workflowID, signalName, signalArg, options, workflow, workflowArgs...)
+	if err != nil {
+		return nil, err
+	}
+	return &WorkflowExecutionAsync{ID: exec.ID}, nil
+}
+
+// GetWorkflowHistoryWithOptions is GetWorkflowHistory with a request struct.
+func (c *workflowClient) GetWorkflowHistoryWithOptions(ctx context.Context, request *GetWorkflowHistoryWithOptionsRequest) HistoryEventIterator {
+	return c.GetWorkflowHistory(ctx, request.WorkflowID, request.RunID, request.IsLongPoll, request.FilterType)
+}
+
+// DescribeWorkflowExecutionWithOptions is DescribeWorkflowExecution with a
+// request struct.
+func (c *workflowClient) DescribeWorkflowExecutionWithOptions(ctx context.Context, request *DescribeWorkflowExecutionWithOptionsRequest) (*api.DescribeWorkflowExecutionResponse, error) {
+	return c.DescribeWorkflowExecution(ctx, request.WorkflowID, request.RunID)
+}
+
 func (c *workflowClient) GetWorkflowHistory(ctx context.Context, workflowID, runID string, isLongPoll bool, filterType api.HistoryEventFilterType) HistoryEventIterator {
 	return &historyIterator{ctx: ctx, c: c, exec: &api.WorkflowExecution{WorkflowID: workflowID, RunID: runID}, longPoll: isLongPoll, filter: filterType}
 }

@@ -219,3 +219,9 @@ func newPtrLike(v interface{}) interface{} {
 }
 
 func derefPtr(p interface{}) interface{} { return reflect.ValueOf(p).Elem().Interface() }
+
+// NewValue wraps data encoded by the default data converter.
+func NewValue(data []byte) Value { return newEncodedValue(data, nil) }
+
+// NewValues wraps data encoded by the default data converter.
+func NewValues(data []byte) Values { return newEncodedValues(data, nil) }

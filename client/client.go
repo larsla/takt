@@ -3,7 +3,10 @@
 package client
 
 import (
+	"errors"
+
 	"github.com/larsla/takt/api"
+	"github.com/larsla/takt/encoded"
 	"github.com/larsla/takt/internal/sdk"
 )
 
@@ -31,6 +34,17 @@ type (
 	// CancelOption values are functional options for CancelWorkflow:
 	// WithCancelReason.
 	CancelOption = sdk.Option
+	// GetWorkflowHistoryWithOptionsRequest is the request of
+	// GetWorkflowHistoryWithOptions.
+	GetWorkflowHistoryWithOptionsRequest = sdk.GetWorkflowHistoryWithOptionsRequest
+	// DescribeWorkflowExecutionWithOptionsRequest is the request of
+	// DescribeWorkflowExecutionWithOptions.
+	DescribeWorkflowExecutionWithOptionsRequest = sdk.DescribeWorkflowExecutionWithOptionsRequest
+	// QueryConsistencyLevel is accepted for compatibility: takt has one
+	// cluster, so every level reads the same state.
+	QueryConsistencyLevel = sdk.QueryConsistencyLevel
+	// FeatureFlags is accepted for compatibility and ignored.
+	FeatureFlags = sdk.FeatureFlags
 )
 
 const (
@@ -45,11 +59,42 @@ const (
 
 	// QueryTypeStackTrace returns the stacks of a workflow's goroutines.
 	QueryTypeStackTrace = sdk.QueryTypeStackTrace
+	// QueryTypeQueryTypes returns the query types a workflow answers.
+	QueryTypeQueryTypes = sdk.QueryTypeQueryTypes
+
+	QueryConsistencyLevelUnspecified = sdk.QueryConsistencyLevelUnspecified
+	QueryConsistencyLevelEventual    = sdk.QueryConsistencyLevelEventual
+	QueryConsistencyLevelStrong      = sdk.QueryConsistencyLevelStrong
 )
 
 // WithCancelReason sets the reason CancelWorkflow records in the
 // workflow's history.
 func WithCancelReason(reason string) CancelOption { return sdk.WithCancelReason(reason) }
+
+// NewValue wraps data encoded by the default data converter, for tests
+// of code that takes an encoded.Value.
+func NewValue(data []byte) encoded.Value { return sdk.NewValue(data) }
+
+// NewValues wraps data encoded by the default data converter.
+func NewValues(data []byte) encoded.Values { return sdk.NewValues(data) }
+
+// IsWorkflowError reports whether err is an error a workflow or activity
+// returned, as opposed to a failure to reach the service.
+func IsWorkflowError(err error) bool {
+	var (
+		custom    *sdk.CustomError
+		canceled  *sdk.CanceledError
+		generic   *sdk.GenericError
+		timeout   *sdk.TimeoutError
+		terminate *sdk.TerminatedError
+		panicked  *sdk.PanicError
+		can       *sdk.ContinueAsNewError
+		unknown   *sdk.UnknownExternalWorkflowExecutionError
+	)
+	return errors.As(err, &custom) || errors.As(err, &canceled) || errors.As(err, &generic) ||
+		errors.As(err, &timeout) || errors.As(err, &terminate) || errors.As(err, &panicked) ||
+		errors.As(err, &can) || errors.As(err, &unknown)
+}
 
 // NewClient creates a client for a domain. Build service with
 // takt.NewServiceClient.

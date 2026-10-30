@@ -42,6 +42,9 @@ func (v PendingActivityState) String() string { return string(v) }
 func (v PendingDecisionState) String() string { return string(v) }
 
 // String returns v as a string.
+func (v QueryConsistencyLevel) String() string { return string(v) }
+
+// String returns v as a string.
 func (v QueryRejectCondition) String() string { return string(v) }
 
 // String returns v as a string.
@@ -97,6 +100,9 @@ func (v PendingActivityState) Ptr() *PendingActivityState { return &v }
 
 // Ptr returns a pointer to v.
 func (v PendingDecisionState) Ptr() *PendingDecisionState { return &v }
+
+// Ptr returns a pointer to v.
+func (v QueryConsistencyLevel) Ptr() *QueryConsistencyLevel { return &v }
 
 // Ptr returns a pointer to v.
 func (v QueryRejectCondition) Ptr() *QueryRejectCondition { return &v }

@@ -810,3 +810,62 @@ func TestContinueAsNewErrorAccessors(t *testing.T) {
 		t.Fatal("reuse policy")
 	}
 }
+
+func queryTypesWorkflow(ctx Context) error {
+	if err := SetQueryHandler(ctx, "state", func() (string, error) { return "ok", nil }); err != nil {
+		return err
+	}
+	if SetQueryHandler(ctx, QueryTypeQueryTypes, func() (string, error) { return "", nil }) == nil {
+		return errors.New("__query_types should be reserved")
+	}
+	GetSignalChannel(ctx, "done").Receive(ctx, nil)
+	return nil
+}
+
+func TestClientExtras(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(queryTypesWorkflow) })
+	async, err := e.client.StartWorkflowAsync(e.ctx, e.options("extras"), queryTypesWorkflow)
+	if err != nil || async.ID != "extras" {
+		t.Fatalf("async start %+v, %v", async, err)
+	}
+	var types []string
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		v, err := e.client.QueryWorkflow(e.ctx, "extras", "", QueryTypeQueryTypes)
+		if err == nil && v.Get(&types) == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if strings.Join(types, ",") != "__query_types,__stack_trace,state" {
+		t.Fatalf("query types %v", types)
+	}
+	if _, err := e.client.SignalWithStartWorkflowAsync(e.ctx, "extras", "done", nil, e.options("extras"), queryTypesWorkflow); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.client.GetWorkflow(e.ctx, "extras", "").Get(e.ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	desc, err := e.client.DescribeWorkflowExecutionWithOptions(e.ctx, &DescribeWorkflowExecutionWithOptionsRequest{WorkflowID: "extras"})
+	if err != nil || desc.WorkflowExecutionInfo.CloseStatus == nil {
+		t.Fatalf("describe %+v, %v", desc, err)
+	}
+	it := e.client.GetWorkflowHistoryWithOptions(e.ctx, &GetWorkflowHistoryWithOptionsRequest{
+		WorkflowID: "extras", FilterType: api.HistoryEventFilterTypeCloseEvent,
+	})
+	if ev, err := it.Next(); err != nil || ev.EventType != api.EventTypeWorkflowExecutionCompleted {
+		t.Fatalf("close event %v, %v", ev, err)
+	}
+	var s string
+	if NewValue([]byte(`"x"`+"\n")).Get(&s) != nil || s != "x" {
+		t.Fatal("NewValue")
+	}
+	if !NewValues([]byte("1\n")).HasValues() {
+		t.Fatal("NewValues")
+	}
+}

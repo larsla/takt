@@ -92,6 +92,7 @@ type (
 	PollForDecisionTaskRequest                                     = api.PollForDecisionTaskRequest
 	PollForDecisionTaskResponse                                    = api.PollForDecisionTaskResponse
 	PollerInfo                                                     = api.PollerInfo
+	QueryConsistencyLevel                                          = api.QueryConsistencyLevel
 	QueryFailedError                                               = api.QueryFailedError
 	QueryRejectCondition                                           = api.QueryRejectCondition
 	QueryRejected                                                  = api.QueryRejected
@@ -285,6 +286,8 @@ const (
 	PendingActivityStateStarted                                = api.PendingActivityStateStarted
 	PendingDecisionStateScheduled                              = api.PendingDecisionStateScheduled
 	PendingDecisionStateStarted                                = api.PendingDecisionStateStarted
+	QueryConsistencyLevelEventual                              = api.QueryConsistencyLevelEventual
+	QueryConsistencyLevelStrong                                = api.QueryConsistencyLevelStrong
 	QueryRejectConditionNotCompletedCleanly                    = api.QueryRejectConditionNotCompletedCleanly
 	QueryRejectConditionNotOpen                                = api.QueryRejectConditionNotOpen
 	TaskListKindNormal                                         = api.TaskListKindNormal

@@ -93,6 +93,15 @@ const (
 	TimeoutTypeHeartbeat       TimeoutType = "HEARTBEAT"
 )
 
+// QueryConsistencyLevel is accepted for compatibility: takt has one cluster
+// and answers every query from the run's current state.
+type QueryConsistencyLevel string
+
+const (
+	QueryConsistencyLevelEventual QueryConsistencyLevel = "EVENTUAL"
+	QueryConsistencyLevelStrong   QueryConsistencyLevel = "STRONG"
+)
+
 // CronOverlapPolicy says what happens to a cron fire time that passes
 // while the previous run is still open.
 type CronOverlapPolicy string

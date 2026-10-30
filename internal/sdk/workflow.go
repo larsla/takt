@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
@@ -295,17 +296,19 @@ func (r *workflowRun) signal(name string, input []byte) {
 // QueryTypeStackTrace returns the stacks of all workflow goroutines.
 const QueryTypeStackTrace = "__stack_trace"
 
+// QueryTypeQueryTypes returns the query types the workflow answers.
+const QueryTypeQueryTypes = "__query_types"
+
 func (r *workflowRun) query(queryType string, args []byte) ([]byte, error) {
-	if queryType == QueryTypeStackTrace {
+	switch queryType {
+	case QueryTypeStackTrace:
 		return encodeArgs(r.env.DataConverter(), []interface{}{r.d.stackTrace()})
+	case QueryTypeQueryTypes:
+		return encodeArgs(r.env.DataConverter(), []interface{}{r.queryTypes()})
 	}
 	h, ok := r.queries[queryType]
 	if !ok {
-		known := []string{QueryTypeStackTrace}
-		for k := range r.queries {
-			known = append(known, k)
-		}
-		return nil, fmt.Errorf("unknown queryType %v. KnownQueryTypes=%v", queryType, known)
+		return nil, fmt.Errorf("unknown queryType %v. KnownQueryTypes=%v", queryType, r.queryTypes())
 	}
 	hv := reflect.ValueOf(h)
 	in, err := decodeArgs(r.env.DataConverter(), hv.Type(), args, 0)
@@ -324,6 +327,16 @@ func (r *workflowRun) query(queryType string, args []byte) ([]byte, error) {
 		return nil, err
 	}
 	return encodeArgs(r.env.DataConverter(), []interface{}{result})
+}
+
+// queryTypes returns the built-in and registered query types, sorted.
+func (r *workflowRun) queryTypes() []string {
+	types := []string{QueryTypeQueryTypes, QueryTypeStackTrace}
+	for k := range r.queries {
+		types = append(types, k)
+	}
+	sort.Strings(types)
+	return types
 }
 
 // Go starts a workflow goroutine.
@@ -808,8 +821,8 @@ func validateVersion(changeID string, version, minSupported, maxSupported Versio
 // SetQueryHandler registers a handler for queryType. The handler takes the
 // query arguments and returns (result, error).
 func setQueryHandler(ctx Context, queryType string, handler interface{}) error {
-	if queryType == QueryTypeStackTrace {
-		return errors.New("queryType __stack_trace is reserved")
+	if queryType == QueryTypeStackTrace || queryType == QueryTypeQueryTypes {
+		return fmt.Errorf("queryType %s is reserved", queryType)
 	}
 	t := reflect.TypeOf(handler)
 	if t == nil || t.Kind() != reflect.Func {
