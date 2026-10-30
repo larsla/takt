@@ -288,7 +288,29 @@ func (r *replayer) close() {
 // replayHistory processes history in the given mode. In modeTask it returns
 // the decisions of the last batch.
 func (r *replayer) replayHistory(ctx context.Context, events []*api.HistoryEvent, mode replayMode) ([]*api.Decision, error) {
+	return r.processBatches(ctx, splitHistory(events), mode)
+}
+
+// errCacheMismatch means a cached replayer can't continue with a history.
+var errCacheMismatch = errors.New("cached workflow state does not match history")
+
+// resume continues a replayer kept from the previous decision task. events
+// start at the DecisionTaskStarted event of that task; sent are the
+// decisions it returned.
+func (r *replayer) resume(ctx context.Context, events []*api.HistoryEvent, sent []*api.Decision) ([]*api.Decision, error) {
 	batches := splitHistory(events)
+	if len(batches) < 2 || !batches[0].completed || len(batches[0].inputs) > 0 {
+		return nil, errCacheMismatch
+	}
+	first := batches[0]
+	if err := matchReplay(sent, first.decisionEvents); err != nil {
+		return nil, errCacheMismatch
+	}
+	r.applyDecisionEvents(first.decisionEvents)
+	return r.processBatches(ctx, batches[1:], modeTask)
+}
+
+func (r *replayer) processBatches(ctx context.Context, batches []*batch, mode replayMode) ([]*api.Decision, error) {
 	for i, b := range batches {
 		live := mode == modeTask && i == len(batches)-1 && !b.completed
 		if !b.completed && !live && mode == modeQuery {

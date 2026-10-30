@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,8 +61,9 @@ type WorkerOptions struct {
 	EnableLoggingInReplay                  bool
 	DisableWorkflowWorker                  bool
 	DisableActivityWorker                  bool
-	// DisableStickyExecution and StickyScheduleToStartTimeout are accepted
-	// for compatibility. Every decision task replays the full history.
+	// DisableStickyExecution turns off the in-memory cache of workflow runs
+	// (see SetStickyWorkflowCacheSize). StickyScheduleToStartTimeout is
+	// accepted for compatibility and ignored.
 	DisableStickyExecution         bool
 	StickyScheduleToStartTimeout   time.Duration
 	BackgroundActivityContext      context.Context
@@ -134,6 +136,9 @@ type Worker struct {
 	laSem     chan struct{}
 	laLimit   *rate.Limiter
 	queryStop func()
+	cache     *stickyCache
+	// fullReplays counts decision tasks that replayed the whole history.
+	fullReplays atomic.Int64
 }
 
 // NewWorker creates a worker for a domain and task list.
@@ -149,6 +154,9 @@ func NewWorker(service api.Service, domain, taskList string, options WorkerOptio
 		stopC:    make(chan struct{}),
 		laSem:    make(chan struct{}, options.MaxConcurrentLocalActivityExecutionSize),
 		laLimit:  limiter(options.WorkerLocalActivitiesPerSecond),
+	}
+	if !options.DisableStickyExecution {
+		w.cache = newStickyCache(int(stickyCacheSize.Load()))
 	}
 	return w
 }
@@ -242,6 +250,7 @@ func (w *Worker) Stop() {
 	case <-time.After(w.opts.WorkerStopTimeout):
 		w.logger.Warn("worker stop timed out with tasks still running")
 	}
+	w.cache.clear()
 	w.logger.Info("Stopped Worker")
 }
 
@@ -352,19 +361,43 @@ func (w *Worker) handleDecision(task *api.PollForDecisionTaskResponse) {
 		logger.Error("failed to fetch history", zap.Error(err))
 		return
 	}
-	r := w.newReplayer(exec, logger, w)
-	decisions, err := r.replayHistory(ctx, events, modeTask)
-	r.close()
+	r, decisions, err := w.runDecisionTask(ctx, task, events, logger)
 	if err != nil {
+		r.close()
 		w.decisionFailed(ctx, logger, task, err)
 		return
 	}
 	_, err = w.service.RespondDecisionTaskCompleted(ctx, &api.RespondDecisionTaskCompletedRequest{
 		TaskToken: task.TaskToken, Decisions: decisions, Identity: w.opts.Identity,
 	})
-	if err != nil {
-		logger.Warn("failed to complete decision task", zap.Error(err))
+	if err != nil || r.completed {
+		r.close()
+		if err != nil {
+			logger.Warn("failed to complete decision task", zap.Error(err))
+		}
+		return
 	}
+	w.cache.put(&stickyEntry{runID: exec.RunID, r: r, consumed: len(events), lastStarted: task.StartedEventID, sent: decisions})
+}
+
+// runDecisionTask continues the cached replayer of the run when the
+// previous decision task completed as cached, and replays from scratch
+// otherwise.
+func (w *Worker) runDecisionTask(ctx context.Context, task *api.PollForDecisionTaskResponse, events []*api.HistoryEvent, logger *zap.Logger) (*replayer, []*api.Decision, error) {
+	if e := w.cache.take(task.WorkflowExecution.RunID); e != nil {
+		if e.lastStarted == task.PreviousStartedEventID && e.consumed > 0 && e.consumed <= len(events) &&
+			events[e.consumed-1].EventID == e.lastStarted {
+			decisions, err := e.r.resume(ctx, events[e.consumed-1:], e.sent)
+			if !errors.Is(err, errCacheMismatch) {
+				return e.r, decisions, err
+			}
+		}
+		e.r.close()
+	}
+	w.fullReplays.Add(1)
+	r := w.newReplayer(task.WorkflowExecution, logger, w)
+	decisions, err := r.replayHistory(ctx, events, modeTask)
+	return r, decisions, err
 }
 
 func (w *Worker) decisionFailed(ctx context.Context, logger *zap.Logger, task *api.PollForDecisionTaskResponse, err error) {

@@ -77,3 +77,7 @@ func ReplayWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string) 
 
 // EnableVerboseLogging is accepted for compatibility and does nothing.
 func EnableVerboseLogging(bool) {}
+
+// SetStickyWorkflowCacheSize sets how many workflow runs each worker keeps
+// in memory between decision tasks. Call it before creating workers.
+func SetStickyWorkflowCacheSize(cacheSize int) { sdk.SetStickyWorkflowCacheSize(cacheSize) }
