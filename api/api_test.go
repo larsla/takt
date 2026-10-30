@@ -96,3 +96,25 @@ func TestSubjects(t *testing.T) {
 		t.Error(APISubject(MethodStartWorkflowExecution))
 	}
 }
+
+func TestGetters(t *testing.T) {
+	var nilEvent *HistoryEvent
+	if nilEvent.GetEventId() != 0 || nilEvent.IsSetEventType() || nilEvent.GetWorkflowExecutionStartedEventAttributes() != nil {
+		t.Fatal("nil receiver should read as zero values")
+	}
+	ev := &HistoryEvent{EventID: 3, EventType: EventTypeWorkflowExecutionStarted}
+	if ev.GetEventId() != 3 || !ev.IsSetEventId() || ev.GetEventType().String() != "WorkflowExecutionStarted" {
+		t.Fatalf("getters: %d %v", ev.GetEventId(), ev.GetEventType())
+	}
+	if *EventTypeTimerFired.Ptr() != EventTypeTimerFired {
+		t.Fatal("Ptr")
+	}
+	exec := &WorkflowExecution{WorkflowID: "w"}
+	if exec.GetWorkflowId() != "w" || exec.GetWorkflowID() != "w" || exec.IsSetRunId() {
+		t.Fatal("ID getters")
+	}
+	child := &PendingChildExecutionInfo{WorkflowTypeName: "t"}
+	if child.GetWorkflowTypName() != "t" {
+		t.Fatal("Cadence's misspelled getter")
+	}
+}
