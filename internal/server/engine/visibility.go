@@ -3,7 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"sort"
+	"errors"
+	"sync"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/larsla/takt/api"
 )
@@ -48,8 +52,79 @@ func (e *Engine) writeVisibility(ctx context.Context, s *State) error {
 		CronSchedule:     s.Start.CronSchedule,
 	}
 	data, _ := json.Marshal(r)
-	_, err := e.vis.Put(ctx, visibilityKey(s.Domain, s.RunID), data)
-	return err
+	key := visibilityKey(s.Domain, s.RunID)
+	if _, err := e.vis.Put(ctx, key, data); err != nil {
+		return err
+	}
+	// Update the local index right away so this server reads its own writes.
+	e.index.put(key, r)
+	return nil
+}
+
+// visIndex is an in-memory copy of the visibility bucket, kept current by
+// a KV watch.
+type visIndex struct {
+	mu    sync.RWMutex
+	recs  map[string]*VisibilityRecord
+	ready bool
+}
+
+func newVisIndex() *visIndex { return &visIndex{recs: map[string]*VisibilityRecord{}} }
+
+func (x *visIndex) put(key string, r *VisibilityRecord) {
+	x.mu.Lock()
+	x.recs[key] = r
+	x.mu.Unlock()
+}
+
+func (x *visIndex) remove(key string) {
+	x.mu.Lock()
+	delete(x.recs, key)
+	x.mu.Unlock()
+}
+
+func (x *visIndex) isReady() bool {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.ready
+}
+
+// StartIndex loads the visibility index and keeps it current until ctx ends.
+func (e *Engine) StartIndex(ctx context.Context) error {
+	w, err := e.vis.WatchAll(ctx)
+	if err != nil {
+		return err
+	}
+	loaded := make(chan struct{})
+	go func() {
+		defer func() { _ = w.Stop() }()
+		for entry := range w.Updates() {
+			if entry == nil {
+				e.index.mu.Lock()
+				e.index.ready = true
+				e.index.mu.Unlock()
+				close(loaded)
+				continue
+			}
+			switch entry.Operation() {
+			case jetstream.KeyValuePut:
+				r := &VisibilityRecord{}
+				if json.Unmarshal(entry.Value(), r) == nil {
+					e.index.put(entry.Key(), r)
+				}
+			case jetstream.KeyValueDelete, jetstream.KeyValuePurge:
+				e.index.remove(entry.Key())
+			}
+		}
+	}()
+	select {
+	case <-loaded:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+		return errors.New("timed out loading the visibility index")
+	}
 }
 
 func (r *VisibilityRecord) info() *api.WorkflowExecutionInfo {
@@ -75,32 +150,35 @@ func (r *VisibilityRecord) info() *api.WorkflowExecutionInfo {
 }
 
 // records returns the visibility records of a domain that match keep,
-// newest start first.
-func (e *Engine) records(ctx context.Context, domain string, keep func(*VisibilityRecord) bool) ([]*VisibilityRecord, error) {
-	lister, err := e.vis.ListKeysFiltered(ctx, api.Token(domain)+".*")
-	if err != nil {
-		return nil, err
-	}
+// newest start first. It reads the index, or the bucket before the index
+// has loaded.
+func (e *Engine) records(ctx context.Context, domain string, keep predicate) ([]*VisibilityRecord, error) {
 	var out []*VisibilityRecord
-	for k := range lister.Keys() {
-		entry, err := e.vis.Get(ctx, k)
+	if e.index.isReady() {
+		e.index.mu.RLock()
+		for _, r := range e.index.recs {
+			if r.Domain == domain && keep(r) {
+				out = append(out, r)
+			}
+		}
+		e.index.mu.RUnlock()
+	} else {
+		lister, err := e.vis.ListKeysFiltered(ctx, api.Token(domain)+".*")
 		if err != nil {
-			continue
+			return nil, err
 		}
-		r := &VisibilityRecord{}
-		if json.Unmarshal(entry.Value(), r) != nil {
-			continue
-		}
-		if keep(r) {
-			out = append(out, r)
+		for k := range lister.Keys() {
+			entry, err := e.vis.Get(ctx, k)
+			if err != nil {
+				continue
+			}
+			r := &VisibilityRecord{}
+			if json.Unmarshal(entry.Value(), r) == nil && keep(r) {
+				out = append(out, r)
+			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].StartTime != out[j].StartTime {
-			return out[i].StartTime > out[j].StartTime
-		}
-		return out[i].RunID < out[j].RunID
-	})
+	(&visQuery{orderBy: "StartTime"}).sortRecords(out)
 	return out, nil
 }
 
@@ -175,4 +253,80 @@ func (e *Engine) ListClosedWorkflowExecutions(ctx context.Context, req *api.List
 		return nil, err
 	}
 	return page(recs, req.MaximumPageSize, req.NextPageToken)
+}
+
+// ListWorkflowExecutions lists runs matching a visibility query.
+func (e *Engine) ListWorkflowExecutions(ctx context.Context, req *api.ListWorkflowExecutionsRequest) (*api.ListWorkflowExecutionsResponse, error) {
+	q, err := parseQuery(req.Query)
+	if err != nil {
+		return nil, err
+	}
+	recs, err := e.records(ctx, req.Domain, q.match)
+	if err != nil {
+		return nil, err
+	}
+	q.sortRecords(recs)
+	return page(recs, req.PageSize, req.NextPageToken)
+}
+
+// CountWorkflowExecutions counts runs matching a visibility query.
+func (e *Engine) CountWorkflowExecutions(ctx context.Context, req *api.CountWorkflowExecutionsRequest) (*api.CountWorkflowExecutionsResponse, error) {
+	q, err := parseQuery(req.Query)
+	if err != nil {
+		return nil, err
+	}
+	recs, err := e.records(ctx, req.Domain, q.match)
+	if err != nil {
+		return nil, err
+	}
+	return &api.CountWorkflowExecutionsResponse{Count: int64(len(recs))}, nil
+}
+
+// PurgeExpired deletes closed runs older than their domain's retention:
+// history, state, visibility record and, if it points there, the current
+// pointer. It returns how many runs it deleted.
+func (e *Engine) PurgeExpired(ctx context.Context) (int, error) {
+	domains, err := e.allDomains(ctx)
+	if err != nil {
+		return 0, err
+	}
+	now := e.nowNano()
+	n := 0
+	for _, d := range domains {
+		cutoff := now - int64(d.RetentionDays)*int64(e.retentionUnit)
+		expired, err := e.records(ctx, d.Name, func(r *VisibilityRecord) bool {
+			return r.CloseTime != 0 && r.CloseTime < cutoff
+		})
+		if err != nil {
+			return n, err
+		}
+		for _, r := range expired {
+			if err := e.purgeRun(ctx, r); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (e *Engine) purgeRun(ctx context.Context, r *VisibilityRecord) error {
+	err := e.history.Purge(ctx, jetstream.WithPurgeSubject(api.HistorySubject(r.Domain, r.WorkflowID, r.RunID)))
+	if err != nil {
+		return err
+	}
+	if err := e.execs.Purge(ctx, runKey(r.Domain, r.WorkflowID, r.RunID)); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return err
+	}
+	if cur, rev, err := e.current(ctx, r.Domain, r.WorkflowID); err == nil && cur != nil && cur.RunID == r.RunID {
+		if err := e.execs.Purge(ctx, currentKey(r.Domain, r.WorkflowID), jetstream.LastRevision(rev)); err != nil && !isConflict(err) {
+			return err
+		}
+	}
+	key := visibilityKey(r.Domain, r.RunID)
+	if err := e.vis.Purge(ctx, key); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return err
+	}
+	e.index.remove(key)
+	return nil
 }

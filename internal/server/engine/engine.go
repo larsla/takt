@@ -40,6 +40,9 @@ type Config struct {
 	QueryTimeout time.Duration
 	// HistoryPageSize is the default number of events per history page.
 	HistoryPageSize int
+	// RetentionUnit is the length of one retention "day". Defaults to 24h;
+	// tests shorten it.
+	RetentionUnit time.Duration
 }
 
 // Engine applies API calls, timers and transfers to workflow state.
@@ -60,6 +63,9 @@ type Engine struct {
 	history  jetstream.Stream
 	tasks    jetstream.Stream
 	maxRetry int
+
+	index         *visIndex
+	retentionUnit time.Duration
 }
 
 const (
@@ -72,14 +78,19 @@ const (
 // New opens the buckets and streams created by the migrations.
 func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e := &Engine{
-		nc:           cfg.NC,
-		js:           cfg.JS,
-		log:          cfg.Logger,
-		now:          cfg.Now,
-		longPoll:     cfg.LongPollTimeout,
-		queryTimeout: cfg.QueryTimeout,
-		pageSize:     cfg.HistoryPageSize,
-		maxRetry:     50,
+		nc:            cfg.NC,
+		js:            cfg.JS,
+		log:           cfg.Logger,
+		now:           cfg.Now,
+		longPoll:      cfg.LongPollTimeout,
+		queryTimeout:  cfg.QueryTimeout,
+		pageSize:      cfg.HistoryPageSize,
+		maxRetry:      50,
+		index:         newVisIndex(),
+		retentionUnit: cfg.RetentionUnit,
+	}
+	if e.retentionUnit == 0 {
+		e.retentionUnit = 24 * time.Hour
 	}
 	if e.log == nil {
 		e.log = slog.Default()

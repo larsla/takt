@@ -15,6 +15,7 @@ import (
 	"github.com/larsla/takt/api"
 	"github.com/larsla/takt/internal/embeddednats"
 	"github.com/larsla/takt/internal/server"
+	"github.com/larsla/takt/internal/server/engine"
 	"github.com/larsla/takt/internal/server/migrations"
 	"github.com/larsla/takt/internal/transport"
 )
@@ -39,6 +40,10 @@ type Options struct {
 	PollTimeout time.Duration
 	// SweepInterval for the server. Defaults to 1h (effectively off).
 	SweepInterval time.Duration
+	// JanitorInterval for the server. Defaults to 1h (effectively off).
+	JanitorInterval time.Duration
+	// RetentionUnit is the length of a retention day. Defaults to 24h.
+	RetentionUnit time.Duration
 }
 
 // New starts a stack and registers Domain. Everything stops at test cleanup.
@@ -76,7 +81,11 @@ func New(t testing.TB, opts ...Options) *Env {
 	if _, err := migrations.Apply(ctx, js, migrations.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := server.Start(ctx, server.Config{NC: nc, JS: js, Logger: o.Logger, SweepInterval: o.SweepInterval})
+	srv, err := server.Start(ctx, server.Config{
+		NC: nc, JS: js, Logger: o.Logger,
+		SweepInterval: o.SweepInterval, JanitorInterval: o.JanitorInterval,
+		Engine: engine.Config{RetentionUnit: o.RetentionUnit},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

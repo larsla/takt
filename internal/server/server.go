@@ -30,6 +30,8 @@ type Config struct {
 	Logger *slog.Logger
 	// SweepInterval is how often interrupted commits are retried. Defaults to 30s.
 	SweepInterval time.Duration
+	// JanitorInterval is how often runs past retention are deleted. Defaults to 1h.
+	JanitorInterval time.Duration
 	// Engine tunes the engine; NC, JS and Logger are filled in from above.
 	Engine engine.Config
 	// MaxConcurrent bounds in-flight API calls, timers and transfers. Defaults to 256.
@@ -61,6 +63,9 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.MaxConcurrent == 0 {
 		cfg.MaxConcurrent = 256
 	}
+	if cfg.JanitorInterval == 0 {
+		cfg.JanitorInterval = time.Hour
+	}
 	ecfg := cfg.Engine
 	ecfg.NC, ecfg.JS, ecfg.Logger = cfg.NC, cfg.JS, cfg.Logger
 	e, err := engine.New(ctx, ecfg)
@@ -69,6 +74,10 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	sctx, cancel := context.WithCancel(context.Background())
 	s := &Server{e: e, log: cfg.Logger, ctx: sctx, cancel: cancel, sem: make(chan struct{}, cfg.MaxConcurrent)}
+	if err := e.StartIndex(sctx); err != nil {
+		cancel()
+		return nil, fmt.Errorf("visibility index: %w", err)
+	}
 
 	if err := s.startConsumer(ctx, cfg.JS, api.TimerStream, "takt_timers", engine.TimerFireSubjects, e.HandleTimer); err != nil {
 		s.Stop()
@@ -82,7 +91,8 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		s.Stop()
 		return nil, err
 	}
-	s.wg.Go(func() { s.sweepLoop(cfg.SweepInterval) })
+	s.wg.Go(func() { s.every(cfg.SweepInterval, "sweep finalized interrupted commits", s.e.Sweep) })
+	s.wg.Go(func() { s.every(cfg.JanitorInterval, "janitor deleted runs past retention", s.e.PurgeExpired) })
 	return s, nil
 }
 
@@ -139,18 +149,19 @@ func (s *Server) startConsumer(ctx context.Context, js jetstream.JetStream, stre
 	return nil
 }
 
-func (s *Server) sweepLoop(every time.Duration) {
-	tick := time.NewTicker(every)
+// every runs job on an interval until the server stops.
+func (s *Server) every(interval time.Duration, done string, job func(context.Context) (int, error)) {
+	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-tick.C:
-			if n, err := s.e.Sweep(s.ctx); err != nil {
-				s.log.Warn("sweep", "err", err)
+			if n, err := job(s.ctx); err != nil {
+				s.log.Warn("background job failed", "job", done, "err", err)
 			} else if n > 0 {
-				s.log.Info("sweep finalized interrupted commits", "runs", n)
+				s.log.Info(done, "runs", n)
 			}
 		}
 	}
@@ -196,6 +207,8 @@ func (s *Server) startService(nc *nats.Conn) error {
 		api.MethodRespondActivityTaskCanceledByID:  handleVoid(s, e.RespondActivityTaskCanceledByID),
 		api.MethodListOpenWorkflowExecutions:       handle(s, e.ListOpenWorkflowExecutions),
 		api.MethodListClosedWorkflowExecutions:     handle(s, e.ListClosedWorkflowExecutions),
+		api.MethodListWorkflowExecutions:           handle(s, e.ListWorkflowExecutions),
+		api.MethodCountWorkflowExecutions:          handle(s, e.CountWorkflowExecutions),
 		api.MethodDescribeTaskList:                 handle(s, e.DescribeTaskList),
 		api.MethodListTaskLists:                    handle(s, e.ListTaskLists),
 		api.MethodRecordPoller:                     handleVoid(s, e.RecordPoller),
