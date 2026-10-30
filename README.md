@@ -55,10 +55,12 @@ More samples live in [examples/](examples): signals, timers, child workflows, re
 ## What's in it
 
 - **Workflows** with deterministic replay: activities, local activities, timers, signals, queries, child workflows, external signals and cancellation, side effects, versioning, continue-as-new, cancellation with disconnected contexts, search attributes.
-- **Activities** with retry policies, all four timeouts, heartbeats that carry progress across retries, and asynchronous completion.
-- **Cron schedules**, delayed starts and workflow-level retry policies.
+- **Activities** with retry policies, all four timeouts, heartbeats that carry progress across retries (sent for you with `EnableAutoHeartbeat`), and asynchronous completion.
+- **Cron schedules** with Cadence's overlap policies, jittered and delayed starts, and workflow-level retry policies.
+- **Sticky execution**: each worker has its own sticky task list, so a run's decision tasks come back to the worker that has it cached instead of replaying elsewhere.
+- **Context propagators, opentracing and workflow interceptors**, configured on `worker.Options` and `client.Options` as in Cadence.
 - **Visibility**: list and count workflows with a small query language (`WorkflowType = 'order' AND CloseTime = missing`).
-- **`testsuite`**: unit tests for workflows and activities on a mock clock, with testify mocks, the same API as `go.uber.org/cadence/testsuite`.
+- **`testsuite`**: unit tests for workflows and activities on a mock clock, with testify mocks, the same API as `go.uber.org/cadence/testsuite`. `mocks` has testify mocks of the client interfaces, like `go.uber.org/cadence/mocks`.
 - **Replay tool**: `worker.NewWorkflowReplayer` checks recorded histories against changed code.
 - **Web UI**: workflow lists, a live event timeline, pending activities, stack traces, queries, task list pollers and backlog, cron workflows, and signal/cancel/terminate actions.
 - **CLI**: `takt domain ...` and `takt workflow start|list|show|describe|signal|query|cancel|terminate`, with Cadence's flag names.
@@ -122,7 +124,7 @@ Pushing a tag like `v1.2.3` runs the tests, then publishes the multi-arch image 
 ## Development
 
 ```sh
-make generate   # templ, Tailwind CSS, .gen/go/shared aliases (output is committed)
+make generate   # templ, Tailwind CSS, shared aliases and getters, mocks (output is committed)
 make check      # generate + lint + gosec + tests with -race and the 70% coverage gate
 make ci         # lint + gosec + tests, without generating (what CI runs)
 make vuln       # govulncheck (needs network)
