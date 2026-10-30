@@ -18,6 +18,10 @@ type ClientOptions struct {
 	MetricsScope  tally.Scope
 	Identity      string
 	DataConverter DataConverter
+	// FeatureFlags and IsolationGroup are accepted for compatibility and
+	// ignored.
+	FeatureFlags   FeatureFlags
+	IsolationGroup string
 }
 
 // StartWorkflowOptions configures a workflow start.

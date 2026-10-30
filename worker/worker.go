@@ -46,6 +46,9 @@ type (
 	NonDeterministicWorkflowPolicy = sdk.NonDeterministicWorkflowPolicy
 	// WorkflowPanicPolicy says what to do when workflow code panics.
 	WorkflowPanicPolicy = sdk.WorkflowPanicPolicy
+	// AutoScalerOptions is accepted for compatibility; takt has no poller
+	// autoscaler.
+	AutoScalerOptions = sdk.AutoScalerOptions
 )
 
 const (
@@ -60,6 +63,17 @@ const (
 func New(service api.Service, domain, taskList string, options Options) Worker {
 	return sdk.NewWorker(service, domain, taskList, options)
 }
+
+// NewV2 creates a worker after checking its options.
+func NewV2(service api.Service, domain, taskList string, options Options) (Worker, error) {
+	if err := options.Validate(); err != nil {
+		return nil, err
+	}
+	return sdk.NewWorker(service, domain, taskList, options), nil
+}
+
+// AugmentWorkerOptions returns options with defaults filled in.
+func AugmentWorkerOptions(options Options) Options { return sdk.AugmentWorkerOptions(options) }
 
 // NewWorkflowReplayer creates a replayer with its own registry.
 func NewWorkflowReplayer() WorkflowReplayer { return sdk.NewWorkflowReplayer() }

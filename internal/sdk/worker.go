@@ -48,19 +48,37 @@ type WorkerOptions struct {
 	WorkerActivitiesPerSecond               float64
 	MaxConcurrentLocalActivityExecutionSize int
 	WorkerLocalActivitiesPerSecond          float64
-	// TaskListActivitiesPerSecond is accepted for compatibility; it is
-	// applied per worker like WorkerActivitiesPerSecond.
-	TaskListActivitiesPerSecond            float64
-	MaxConcurrentActivityTaskPollers       int
+	// TaskListActivitiesPerSecond limits the activities started per second
+	// on the task list across all its workers. Each worker takes an equal
+	// share, recounting the task list's pollers every 10 seconds, so the
+	// limit is approximate while workers come and go.
+	TaskListActivitiesPerSecond      float64
+	MaxConcurrentActivityTaskPollers int
+	// MinConcurrentActivityTaskPollers, MinConcurrentDecisionTaskPollers,
+	// AutoScalerOptions and the PollerAutoScaler fields are accepted for
+	// compatibility. takt has no poller autoscaler: a worker always runs
+	// MaxConcurrent*TaskPollers pollers.
+	MinConcurrentActivityTaskPollers       int
 	MaxConcurrentDecisionTaskExecutionSize int
 	WorkerDecisionTasksPerSecond           float64
 	MaxConcurrentDecisionTaskPollers       int
+	MinConcurrentDecisionTaskPollers       int
+	PollerAutoScalerCooldown               time.Duration
+	PollerAutoScalerTargetUtilization      float64
+	PollerAutoScalerDryRun                 bool
+	AutoScalerOptions                      AutoScalerOptions
 	Identity                               string
-	MetricsScope                           tally.Scope
-	Logger                                 *zap.Logger
-	EnableLoggingInReplay                  bool
-	DisableWorkflowWorker                  bool
-	DisableActivityWorker                  bool
+	// IsolationGroup is accepted for compatibility and ignored: takt has no
+	// isolation groups, and any worker on the task list can get any task.
+	IsolationGroup        string
+	MetricsScope          tally.Scope
+	Logger                *zap.Logger
+	EnableLoggingInReplay bool
+	// EnableWorkflowLifecycleLogging logs when a workflow run starts and
+	// closes on this worker.
+	EnableWorkflowLifecycleLogging bool
+	DisableWorkflowWorker          bool
+	DisableActivityWorker          bool
 	// DisableStickyExecution turns off the in-memory cache of workflow runs
 	// (see SetStickyWorkflowCacheSize). StickyScheduleToStartTimeout is
 	// accepted for compatibility and ignored.
@@ -71,10 +89,55 @@ type WorkerOptions struct {
 	WorkflowPanicPolicy            WorkflowPanicPolicy
 	DataConverter                  DataConverter
 	WorkerStopTimeout              time.Duration
-	// EnableSessionWorker and MaxConcurrentSessionExecutionSize are accepted
-	// for compatibility; sessions are not supported.
+	// EnableSessionWorker makes Start fail: takt doesn't support sessions.
+	// MaxConcurrentSessionExecutionSize is ignored.
 	EnableSessionWorker               bool
 	MaxConcurrentSessionExecutionSize int
+	// FeatureFlags and WorkerBugPorts are accepted for compatibility and
+	// ignored.
+	FeatureFlags   FeatureFlags
+	WorkerBugPorts WorkerBugPorts
+}
+
+// AutoScalerOptions configures Cadence's poller autoscaler. takt accepts
+// it for compatibility and ignores it.
+type AutoScalerOptions struct {
+	Enabled        bool
+	Cooldown       time.Duration
+	PollerMinCount int
+	PollerMaxCount int
+}
+
+// FeatureFlags toggles Cadence client features. takt accepts them for
+// compatibility and ignores them.
+type FeatureFlags struct {
+	WorkflowExecutionAlreadyCompletedErrorEnabled bool
+	AutoforwardingEnabled                         bool
+	PollerAutoScalerEnabled                       bool
+	EphemeralTaskListsEnabled                     bool
+}
+
+// WorkerBugPorts turns on old Cadence client behavior. takt accepts it for
+// compatibility and ignores it.
+type WorkerBugPorts struct {
+	DisableStrictNonDeterminismCheck bool
+}
+
+// Validate reports options that a worker can't run with.
+func (o WorkerOptions) Validate() error {
+	switch {
+	case !o.DisableStickyExecution && o.MaxConcurrentDecisionTaskPollers == 1:
+		return errors.New("DecisionTaskPollers must be >= 2 or use default value")
+	case o.EnableSessionWorker:
+		return errors.New("sessions are not supported by takt: EnableSessionWorker must be false")
+	}
+	return nil
+}
+
+// AugmentWorkerOptions returns options with defaults filled in.
+func AugmentWorkerOptions(o WorkerOptions) WorkerOptions {
+	o.defaults("")
+	return o
 }
 
 func (o *WorkerOptions) defaults(taskList string) {
@@ -96,6 +159,9 @@ func (o *WorkerOptions) defaults(taskList string) {
 	if o.Identity == "" {
 		host, _ := os.Hostname()
 		o.Identity = fmt.Sprintf("%d@%s@%s", os.Getpid(), host, taskList)
+	}
+	if o.StickyScheduleToStartTimeout <= 0 {
+		o.StickyScheduleToStartTimeout = 5 * time.Second
 	}
 	if o.MetricsScope == nil {
 		o.MetricsScope = tally.NoopScope
@@ -190,6 +256,9 @@ func (w *Worker) Start() error {
 	if w.domain == "" || w.taskList == "" {
 		return errors.New("worker needs a domain and a task list")
 	}
+	if w.opts.EnableSessionWorker {
+		return errors.New("sessions are not supported by takt: EnableSessionWorker must be false")
+	}
 	workflows, activities := w.workflowNames(), w.activityNames()
 	if len(workflows) == 0 && len(activities) == 0 {
 		return errors.New("worker has no workflows or activities registered")
@@ -202,7 +271,7 @@ func (w *Worker) Start() error {
 		w.decisionScope.Counter(MetricWorkerStart).Inc(1)
 		for range w.opts.MaxConcurrentDecisionTaskPollers {
 			w.decisionScope.Counter(MetricPollerStart).Inc(1)
-			w.wg.Go(func() { w.pollLoop(sem, lim, w.pollDecision) })
+			w.wg.Go(func() { w.pollLoop(sem, w.pollDecision, lim) })
 		}
 		if l, ok := w.raw.(queryListener); ok {
 			stop, err := l.ListenQueries(w.domain, w.taskList, w.handleQuery)
@@ -215,15 +284,15 @@ func (w *Worker) Start() error {
 	}
 	if !w.opts.DisableActivityWorker && len(activities) > 0 {
 		sem := make(chan struct{}, w.opts.MaxConcurrentActivityExecutionSize)
-		perSecond := w.opts.WorkerActivitiesPerSecond
-		if perSecond <= 0 {
-			perSecond = w.opts.TaskListActivitiesPerSecond
+		lim := limiter(w.opts.WorkerActivitiesPerSecond)
+		tlLim := limiter(w.opts.TaskListActivitiesPerSecond)
+		if tlLim != nil {
+			w.wg.Go(func() { w.shareTaskListRate(tlLim) })
 		}
-		lim := limiter(perSecond)
 		w.activityScope.Counter(MetricWorkerStart).Inc(1)
 		for range w.opts.MaxConcurrentActivityTaskPollers {
 			w.activityScope.Counter(MetricPollerStart).Inc(1)
-			w.wg.Go(func() { w.pollLoop(sem, lim, w.pollActivity) })
+			w.wg.Go(func() { w.pollLoop(sem, w.pollActivity, lim, tlLim) })
 		}
 	}
 	w.logger.Info("Started Worker", zap.Strings("workflows", workflows), zap.Strings("activities", activities))
@@ -270,12 +339,47 @@ func (w *Worker) Stop() {
 	w.logger.Info("Stopped Worker")
 }
 
-// pollLoop polls with poll until the worker stops. poll returns a function
-// that handles the task, or nil when there was no task.
-func (w *Worker) pollLoop(sem chan struct{}, lim *rate.Limiter, poll func() (func(), error)) {
-	for w.ctx.Err() == nil {
-		if lim != nil && lim.Wait(w.ctx) != nil {
+// taskListRateInterval is how often a worker recounts the pollers of its
+// task list to share TaskListActivitiesPerSecond.
+var taskListRateInterval = 10 * time.Second
+
+// shareTaskListRate sets lim to this worker's share of
+// TaskListActivitiesPerSecond: the total divided by the number of workers
+// polling the task list for activities.
+func (w *Worker) shareTaskListRate(lim *rate.Limiter) {
+	total := w.opts.TaskListActivitiesPerSecond
+	for {
+		workers := 1
+		resp, err := w.service.DescribeTaskList(w.ctx, &api.DescribeTaskListRequest{
+			Domain: w.domain, TaskList: &api.TaskList{Name: w.taskList}, TaskListType: api.TaskListTypeActivity,
+		})
+		if err == nil {
+			ids := map[string]bool{w.opts.Identity: true}
+			for _, p := range resp.Pollers {
+				ids[p.Identity] = true
+			}
+			workers = len(ids)
+		}
+		share := total / float64(workers)
+		lim.SetLimit(rate.Limit(share))
+		lim.SetBurst(int(math.Max(1, share)))
+		select {
+		case <-w.ctx.Done():
 			return
+		case <-time.After(taskListRateInterval):
+		}
+	}
+}
+
+// pollLoop polls with poll until the worker stops. poll returns a function
+// that handles the task, or nil when there was no task. Each poll waits
+// for all limiters.
+func (w *Worker) pollLoop(sem chan struct{}, poll func() (func(), error), limiters ...*rate.Limiter) {
+	for w.ctx.Err() == nil {
+		for _, lim := range limiters {
+			if lim != nil && lim.Wait(w.ctx) != nil {
+				return
+			}
 		}
 		select {
 		case sem <- struct{}{}:
@@ -433,6 +537,9 @@ func (w *Worker) handleDecision(task *api.PollForDecisionTaskResponse) {
 	if err == nil {
 		scope.Counter(MetricDecisionTaskCompleted).Inc(1)
 		workflowCloseMetrics(scope, decisions, workflowStartTime(events))
+		if w.opts.EnableWorkflowLifecycleLogging {
+			logLifecycle(logger, task, decisions)
+		}
 	} else {
 		scope.Counter(MetricDecisionResponseFailed).Inc(1)
 	}
@@ -466,6 +573,20 @@ func (w *Worker) runDecisionTask(ctx context.Context, task *api.PollForDecisionT
 	r := w.newReplayer(task.WorkflowExecution, task.WorkflowType.Name, logger, w)
 	decisions, err := r.replayHistory(ctx, events, modeTask)
 	return r, decisions, err
+}
+
+// logLifecycle logs a run's first decision task and its close.
+func logLifecycle(logger *zap.Logger, task *api.PollForDecisionTaskResponse, decisions []*api.Decision) {
+	if task.PreviousStartedEventID == 0 {
+		logger.Info("Workflow started")
+	}
+	for _, d := range decisions {
+		switch d.DecisionType {
+		case api.DecisionTypeCompleteWorkflowExecution, api.DecisionTypeFailWorkflowExecution,
+			api.DecisionTypeCancelWorkflowExecution, api.DecisionTypeContinueAsNewWorkflowExecution:
+			logger.Info("Workflow closed", zap.String("Decision", string(d.DecisionType)))
+		}
+	}
 }
 
 func (w *Worker) decisionFailed(ctx context.Context, logger *zap.Logger, scope tally.Scope, task *api.PollForDecisionTaskResponse, err error) {

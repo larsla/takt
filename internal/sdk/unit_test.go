@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"github.com/larsla/takt/api"
 )
 
@@ -325,5 +328,75 @@ func TestErrorHelpers(t *testing.T) {
 	}
 	if NewCustomError("r").GetFailureCategory() != api.FailureCategoryStandard || failureOptions(NewCustomError("r")) != nil {
 		t.Fatal("defaults")
+	}
+}
+
+// pollerService answers DescribeTaskList with a fixed set of pollers.
+type pollerService struct {
+	api.Service
+	identities []string
+}
+
+func (s *pollerService) DescribeTaskList(ctx context.Context, req *api.DescribeTaskListRequest) (*api.DescribeTaskListResponse, error) {
+	resp := &api.DescribeTaskListResponse{}
+	for _, id := range s.identities {
+		resp.Pollers = append(resp.Pollers, &api.PollerInfo{Identity: id})
+	}
+	return resp, nil
+}
+
+func TestShareTaskListRate(t *testing.T) {
+	svc := &pollerService{identities: []string{"me", "other", "third", "fourth"}}
+	w := NewWorker(svc, "d", "tl", WorkerOptions{Identity: "me", TaskListActivitiesPerSecond: 8})
+	ctx, cancel := context.WithCancel(context.Background())
+	w.ctx = ctx
+	lim := limiter(8)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.shareTaskListRate(lim)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for lim.Limit() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("limit %v, want 2", lim.Limit())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if lim.Burst() != 2 {
+		t.Fatalf("burst %d", lim.Burst())
+	}
+	cancel()
+	<-done
+}
+
+func TestWorkerOptionsValidate(t *testing.T) {
+	if err := (WorkerOptions{}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if (WorkerOptions{MaxConcurrentDecisionTaskPollers: 1}).Validate() == nil {
+		t.Error("one decision poller with sticky execution should fail")
+	}
+	if (WorkerOptions{EnableSessionWorker: true}).Validate() == nil {
+		t.Error("sessions should fail")
+	}
+	o := AugmentWorkerOptions(WorkerOptions{})
+	if o.MaxConcurrentActivityTaskPollers == 0 || o.Logger == nil {
+		t.Errorf("defaults missing: %+v", o)
+	}
+	w := NewWorker(&pollerService{}, "d", "tl", WorkerOptions{EnableSessionWorker: true})
+	w.RegisterActivity(greet)
+	if w.Start() == nil {
+		t.Error("Start should refuse sessions")
+	}
+}
+
+func TestLogLifecycle(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	logLifecycle(zap.New(core), &api.PollForDecisionTaskResponse{}, []*api.Decision{
+		{DecisionType: api.DecisionTypeCompleteWorkflowExecution},
+	})
+	if logs.Len() != 2 {
+		t.Fatalf("logged %v", logs.All())
 	}
 }
