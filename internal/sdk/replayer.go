@@ -965,7 +965,7 @@ func (r *replayer) requestCancelExternal(domain, workflowID, runID string, child
 	r.cancels[id] = &extHandle{id: id, decision: d, cb: cb}
 }
 
-func (r *replayer) SignalExternalWorkflow(domain, workflowID, runID, signalName string, input []byte, childOnly bool, cb resultHandler) {
+func (r *replayer) SignalExternalWorkflow(domain, workflowID, runID, signalName string, input []byte, _ interface{}, childOnly bool, cb resultHandler) {
 	id := r.NextID()
 	d := &api.Decision{
 		DecisionType: api.DecisionTypeSignalExternalWorkflowExecution,

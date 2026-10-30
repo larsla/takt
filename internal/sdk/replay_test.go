@@ -11,7 +11,7 @@ import (
 )
 
 // recordHistory runs a workflow to completion and returns its history.
-func recordHistory(t *testing.T, e *testEnv, run WorkflowRun) *api.History {
+func recordHistory(t *testing.T, e *stackEnv, run WorkflowRun) *api.History {
 	t.Helper()
 	if err := run.Get(e.ctx, nil); err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func recordHistory(t *testing.T, e *testEnv, run WorkflowRun) *api.History {
 
 func TestReplayDetectsChanges(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) {
 		w.RegisterWorkflowWithOptions(helloWorkflow, RegisterWorkflowOptions{Name: "greeter"})
 		w.RegisterWorkflow(replayHeavyWorkflow)

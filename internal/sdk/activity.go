@@ -46,6 +46,8 @@ type activityEnv struct {
 	heartbeatDetails []byte
 	workerStop       <-chan struct{}
 	isLocal          bool
+	// noThrottle sends every heartbeat (the test environment uses it).
+	noThrottle bool
 
 	mu              sync.Mutex
 	cancel          context.CancelFunc
@@ -105,6 +107,10 @@ func (env *activityEnv) throttle() time.Duration {
 }
 
 func (env *activityEnv) heartbeat(data []byte) {
+	if env.noThrottle {
+		env.send(data)
+		return
+	}
 	env.mu.Lock()
 	if wait := env.throttle() - time.Since(env.lastSent); wait > 0 {
 		env.pending, env.hasPending = data, true

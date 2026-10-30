@@ -33,7 +33,7 @@ func signalOrTimerWorkflow(ctx Context, wait time.Duration) (string, error) {
 
 func TestSelectorSignalAndTimer(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(signalOrTimerWorkflow) })
 
 	run := e.run("sel-signal", signalOrTimerWorkflow, time.Hour)
@@ -80,7 +80,7 @@ func parentWorkflow(ctx Context, n int) (string, error) {
 
 func TestChildWorkflow(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) {
 		w.RegisterWorkflow(parentWorkflow)
 		w.RegisterWorkflow(childWorkflow)
@@ -149,7 +149,7 @@ func replayHeavyWorkflow(ctx Context) (string, error) {
 
 func TestSideEffectsAndVersions(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	resetCount("se:replay-heavy-run")
 	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(replayHeavyWorkflow) })
 	var result string
@@ -191,7 +191,7 @@ func localActivityWorkflow(ctx Context) (string, error) {
 
 func TestLocalActivity(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	resetCount("la:local")
 	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(localActivityWorkflow) })
 	var result string
@@ -221,7 +221,7 @@ func queryWorkflow(ctx Context) error {
 
 func TestQuery(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(queryWorkflow) })
 	run := e.run("query", queryWorkflow)
 
@@ -277,7 +277,7 @@ func counterWorkflow(ctx Context, n, limit int) (int, error) {
 
 func TestContinueAsNew(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(counterWorkflow) })
 	var result int
 	if err := e.run("counter", counterWorkflow, 0, 3).Get(e.ctx, &result); err != nil || result != 3 {
@@ -317,7 +317,7 @@ func cancellableWorkflow(ctx Context) (string, error) {
 
 func TestCancellation(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) {
 		w.RegisterWorkflow(cancellableWorkflow)
 		w.RegisterActivity(heartbeatingActivity)
@@ -345,7 +345,7 @@ func TestCancellation(t *testing.T) {
 	}
 }
 
-func historyTypes(t *testing.T, e *testEnv, run WorkflowRun) []api.EventType {
+func historyTypes(t *testing.T, e *stackEnv, run WorkflowRun) []api.EventType {
 	t.Helper()
 	it := e.client.GetWorkflowHistory(e.ctx, run.GetID(), run.GetRunID(), false, api.HistoryEventFilterTypeAllEvent)
 	var out []api.EventType
@@ -394,7 +394,7 @@ func retryWorkflow(ctx Context) (string, error) {
 
 func TestActivityRetries(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	resetCount("retry:retry")
 	e.worker(WorkerOptions{}, func(w *Worker) {
 		w.RegisterWorkflow(retryWorkflow)
@@ -425,7 +425,7 @@ func asyncWorkflow(ctx Context) (string, error) {
 
 func TestAsyncActivityCompletion(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) {
 		w.RegisterWorkflow(asyncWorkflow)
 		w.RegisterActivity(asyncActivity)
@@ -468,7 +468,7 @@ func TestNondeterminismPolicies(t *testing.T) {
 	for _, policy := range []NonDeterministicWorkflowPolicy{NonDeterministicWorkflowPolicyBlockWorkflow, NonDeterministicWorkflowPolicyFailWorkflow} {
 		t.Run(fmt.Sprint(policy), func(t *testing.T) {
 			t.Parallel()
-			e := newTestEnv(t)
+			e := newStackEnv(t)
 			w1 := e.worker(WorkerOptions{}, func(w *Worker) {
 				w.RegisterWorkflowWithOptions(waitThenGreetV1, RegisterWorkflowOptions{Name: "waitThenGreet"})
 				w.RegisterActivity(greet)
@@ -514,7 +514,7 @@ func panickingWorkflow(ctx Context) error {
 
 func TestWorkflowPanic(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{WorkflowPanicPolicy: FailWorkflow}, func(w *Worker) { w.RegisterWorkflow(panickingWorkflow) })
 	err := e.run("panic", panickingWorkflow).Get(e.ctx, nil)
 	var pe *PanicError
@@ -574,7 +574,7 @@ func coroutinesWorkflow(ctx Context) (int, error) {
 
 func TestCoroutinesAndChannels(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(coroutinesWorkflow) })
 	var result int
 	if err := e.run("coroutines", coroutinesWorkflow).Get(e.ctx, &result); err != nil || result != 136 {
@@ -588,7 +588,7 @@ func failingWorkflow(ctx Context) error {
 
 func TestWorkflowErrors(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) { w.RegisterWorkflow(failingWorkflow) })
 	err := e.run("fail", failingWorkflow).Get(e.ctx, nil)
 	var ge *GenericError

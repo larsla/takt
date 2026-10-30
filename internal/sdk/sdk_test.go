@@ -10,23 +10,23 @@ import (
 
 const testTaskList = "sdk-tl"
 
-type testEnv struct {
+type stackEnv struct {
 	t      *testing.T
 	stack  *servertest.Env
 	client Client
 	ctx    context.Context
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+func newStackEnv(t *testing.T) *stackEnv {
 	t.Helper()
 	stack := servertest.New(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	t.Cleanup(cancel)
-	return &testEnv{t: t, stack: stack, client: NewClient(stack.Client, servertest.Domain, nil), ctx: ctx}
+	return &stackEnv{t: t, stack: stack, client: NewClient(stack.Client, servertest.Domain, nil), ctx: ctx}
 }
 
 // worker starts a worker with the given registrations.
-func (e *testEnv) worker(opts WorkerOptions, register func(w *Worker)) *Worker {
+func (e *stackEnv) worker(opts WorkerOptions, register func(w *Worker)) *Worker {
 	e.t.Helper()
 	w := NewWorker(e.stack.Client, servertest.Domain, testTaskList, opts)
 	register(w)
@@ -37,7 +37,7 @@ func (e *testEnv) worker(opts WorkerOptions, register func(w *Worker)) *Worker {
 	return w
 }
 
-func (e *testEnv) options(id string) StartWorkflowOptions {
+func (e *stackEnv) options(id string) StartWorkflowOptions {
 	return StartWorkflowOptions{
 		ID:                              id,
 		TaskList:                        testTaskList,
@@ -46,7 +46,7 @@ func (e *testEnv) options(id string) StartWorkflowOptions {
 	}
 }
 
-func (e *testEnv) run(id string, wf interface{}, args ...interface{}) WorkflowRun {
+func (e *stackEnv) run(id string, wf interface{}, args ...interface{}) WorkflowRun {
 	e.t.Helper()
 	run, err := e.client.ExecuteWorkflow(e.ctx, e.options(id), wf, args...)
 	if err != nil {
@@ -68,7 +68,7 @@ func helloWorkflow(ctx Context, name string) (string, error) {
 
 func TestHelloWorld(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t)
+	e := newStackEnv(t)
 	e.worker(WorkerOptions{}, func(w *Worker) {
 		w.RegisterWorkflow(helloWorkflow)
 		w.RegisterActivity(greet)

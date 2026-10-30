@@ -66,6 +66,8 @@ type activityParams struct {
 	retryPolicy         *api.RetryPolicy
 	waitForCancellation bool
 	header              *api.Header
+	// args are the caller's arguments, for test mocks.
+	args []interface{}
 }
 
 type localActivityParams struct {
@@ -91,6 +93,8 @@ type childParams struct {
 	memo                *api.Memo
 	searchAttributes    *api.SearchAttributes
 	parentClosePolicy   ParentClosePolicy
+	// args are the caller's arguments, for test mocks.
+	args []interface{}
 }
 
 // workflowEnvironment is what workflow code runs against. The replayer
@@ -114,7 +118,7 @@ type workflowEnvironment interface {
 	ExecuteChildWorkflow(p childParams, cb resultHandler, started func(WorkflowExecution, error))
 	RequestCancelChildWorkflow(domain, workflowID string)
 	RequestCancelExternalWorkflow(domain, workflowID, runID string, cb resultHandler)
-	SignalExternalWorkflow(domain, workflowID, runID, signalName string, input []byte, childOnly bool, cb resultHandler)
+	SignalExternalWorkflow(domain, workflowID, runID, signalName string, input []byte, arg interface{}, childOnly bool, cb resultHandler)
 	SideEffect(f func() ([]byte, error), cb resultHandler)
 	MutableSideEffect(id string, f func() interface{}, equals func(a, b interface{}) bool) Value
 	GetVersion(changeID string, minSupported, maxSupported Version) Version
@@ -367,6 +371,7 @@ func activityParamsFrom(ctx Context, env workflowEnvironment, activity interface
 		heartbeat:           o.HeartbeatTimeout,
 		retryPolicy:         o.RetryPolicy.toAPI(),
 		waitForCancellation: o.WaitForCancellation,
+		args:                args,
 	}, nil
 }
 
@@ -502,6 +507,7 @@ func ExecuteChildWorkflow(ctx Context, childWorkflow interface{}, args ...interf
 		retryPolicy:         o.RetryPolicy.toAPI(),
 		cronSchedule:        o.CronSchedule,
 		parentClosePolicy:   o.ParentClosePolicy,
+		args:                args,
 	}
 	if memo != nil {
 		p.memo = &api.Memo{Fields: memo}
@@ -616,7 +622,7 @@ func signalExternal(ctx Context, domain, workflowID, runID, signalName string, a
 		f.Set(nil, err)
 		return f
 	}
-	env.SignalExternalWorkflow(domain, workflowID, runID, signalName, input, childOnly, func(_ []byte, err error) {
+	env.SignalExternalWorkflow(domain, workflowID, runID, signalName, input, arg, childOnly, func(_ []byte, err error) {
 		if !f.ready {
 			f.Set(nil, err)
 		}
