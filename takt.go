@@ -26,6 +26,12 @@ type (
 	RetryPolicy = sdk.RetryPolicy
 	// CustomError carries an application-defined reason and details.
 	CustomError = sdk.CustomError
+	// CustomErrorOption is passed to NewCustomError among the details:
+	// WithFailureCategory, WithNextRetryDelay.
+	CustomErrorOption = sdk.CustomErrorOption
+	// NonDeterministicError reports workflow code that no longer matches
+	// its history.
+	NonDeterministicError = sdk.NonDeterministicError
 	// CanceledError is returned when an operation was canceled.
 	CanceledError = sdk.CanceledError
 	// TimeoutError is returned when an activity or child workflow timed out.
@@ -44,6 +50,10 @@ type (
 	// takes the place of Cadence's workflowserviceclient.Interface.
 	ServiceClient = api.Service
 )
+
+// LibraryVersion is the version of go.uber.org/cadence whose API this SDK
+// follows.
+const LibraryVersion = "1.4.0"
 
 // ErrNoData is returned when decoding a value that is not there.
 var ErrNoData = sdk.ErrNoData
@@ -68,8 +78,37 @@ func NewHeartbeatTimeoutError(details ...interface{}) *TimeoutError {
 	return sdk.NewHeartbeatTimeoutError(details...)
 }
 
+// WithFailureCategory sets the failure category of an activity error.
+// FailureCategoryFatal stops the server from retrying the activity.
+func WithFailureCategory(c api.FailureCategory) CustomErrorOption { return sdk.WithFailureCategory(c) }
+
+// WithNextRetryDelay replaces the retry policy's backoff before the next
+// attempt of the activity that returns the error.
+func WithNextRetryDelay(d time.Duration) CustomErrorOption { return sdk.WithNextRetryDelay(d) }
+
 // IsCanceledError reports whether err is a CanceledError.
 func IsCanceledError(err error) bool { return sdk.IsCanceledError(err) }
+
+// IsCustomError reports whether err is a CustomError.
+func IsCustomError(err error) bool { return sdk.IsCustomError(err) }
+
+// IsGenericError reports whether err is a GenericError.
+func IsGenericError(err error) bool { return sdk.IsGenericError(err) }
+
+// IsTimeoutError reports whether err is a TimeoutError.
+func IsTimeoutError(err error) bool { return sdk.IsTimeoutError(err) }
+
+// IsTerminatedError reports whether err is a TerminatedError.
+func IsTerminatedError(err error) bool { return sdk.IsTerminatedError(err) }
+
+// IsPanicError reports whether err is a PanicError.
+func IsPanicError(err error) bool { return sdk.IsPanicError(err) }
+
+// IsWorkflowExecutionAlreadyStartedError reports whether err says a workflow
+// with the same ID is already running.
+func IsWorkflowExecutionAlreadyStartedError(err error) bool {
+	return sdk.IsWorkflowExecutionAlreadyStartedError(err)
+}
 
 // ServiceOptions tunes the NATS service client.
 type ServiceOptions struct {

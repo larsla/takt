@@ -93,6 +93,17 @@ const (
 	TimeoutTypeHeartbeat       TimeoutType = "HEARTBEAT"
 )
 
+// FailureCategory classifies an activity failure apart from its reason.
+type FailureCategory string
+
+const (
+	FailureCategoryPoll     FailureCategory = "POLL"
+	FailureCategoryStandard FailureCategory = "STANDARD"
+	// FailureCategoryFatal failures are not retried, whatever the retry
+	// policy says.
+	FailureCategoryFatal FailureCategory = "FATAL"
+)
+
 type WorkflowIDReusePolicy string
 
 const (

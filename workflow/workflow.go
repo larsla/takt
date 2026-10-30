@@ -10,6 +10,7 @@ import (
 	"github.com/uber-go/tally"
 	"go.uber.org/zap"
 
+	"github.com/larsla/takt/api"
 	"github.com/larsla/takt/internal/sdk"
 )
 
@@ -46,6 +47,20 @@ type (
 	Version = sdk.Version
 	// ContinueAsNewError ends a run and starts a new one.
 	ContinueAsNewError = sdk.ContinueAsNewError
+	// GenericError is returned by an activity or child workflow that failed
+	// with an error other than a CustomError.
+	GenericError = sdk.GenericError
+	// TimeoutError is returned when an activity or child workflow timed out.
+	TimeoutError = sdk.TimeoutError
+	// TerminatedError is returned when a workflow was terminated.
+	TerminatedError = sdk.TerminatedError
+	// PanicError holds a panic in workflow or activity code.
+	PanicError = sdk.PanicError
+	// UnknownExternalWorkflowExecutionError is returned when signaling or
+	// canceling a workflow that does not exist.
+	UnknownExternalWorkflowExecutionError = sdk.UnknownExternalWorkflowExecutionError
+	// RetryPolicy says how to retry failed activities and workflows.
+	RetryPolicy = sdk.RetryPolicy
 	// ParentClosePolicy says what happens to a child when its parent closes.
 	ParentClosePolicy = sdk.ParentClosePolicy
 	// WorkflowIDReusePolicy says when a workflow ID may be reused.
@@ -72,6 +87,17 @@ var (
 	// ErrDeadlineExceeded is the error of a context past its deadline.
 	ErrDeadlineExceeded = sdk.ErrDeadlineExceeded
 )
+
+// NewTimeoutError creates a TimeoutError, for unit tests of workflows.
+func NewTimeoutError(timeoutType api.TimeoutType, details ...interface{}) *TimeoutError {
+	return sdk.NewTimeoutError(timeoutType, details...)
+}
+
+// NewHeartbeatTimeoutError creates a heartbeat TimeoutError, for unit tests
+// of workflows.
+func NewHeartbeatTimeoutError(details ...interface{}) *TimeoutError {
+	return sdk.NewHeartbeatTimeoutError(details...)
+}
 
 // Register registers a workflow function with all workers.
 func Register(workflowFunc interface{}) { sdk.RegisterWorkflow(workflowFunc) }

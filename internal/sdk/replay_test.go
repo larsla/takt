@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +61,10 @@ func TestReplayDetectsChanges(t *testing.T) {
 	err := changed.ReplayWorkflowHistory(nil, hello)
 	if err == nil || !strings.Contains(err.Error(), "nondeterministic") {
 		t.Fatalf("changed code replayed without error: %v", err)
+	}
+	var nd *NonDeterministicError
+	if !errors.As(err, &nd) || nd.Reason == "" || nd.WorkflowType != "greeter" || nd.WorkflowID == "" {
+		t.Fatalf("nondeterministic error %+v", nd)
 	}
 
 	// File variants: a bare event list and a {"events": ...} object.

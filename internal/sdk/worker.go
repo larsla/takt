@@ -470,7 +470,7 @@ func (w *Worker) runDecisionTask(ctx context.Context, task *api.PollForDecisionT
 
 func (w *Worker) decisionFailed(ctx context.Context, logger *zap.Logger, scope tally.Scope, task *api.PollForDecisionTaskResponse, err error) {
 	var (
-		nd *nondeterminismError
+		nd *NonDeterministicError
 		pe *PanicError
 	)
 	if errors.As(err, &nd) {
@@ -630,7 +630,7 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 		reason, details := errorDetails(err, w.opts.DataConverter)
 		outcome = MetricActivityTaskFailed
 		respondErr = w.service.RespondActivityTaskFailed(rctx, &api.RespondActivityTaskFailedRequest{
-			TaskToken: task.TaskToken, Reason: reason, Details: details, Identity: w.opts.Identity,
+			TaskToken: task.TaskToken, Reason: reason, Details: details, Identity: w.opts.Identity, FailureOptions: failureOptions(err),
 		})
 	default:
 		outcome = MetricActivityTaskCompleted

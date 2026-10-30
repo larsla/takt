@@ -3,8 +3,10 @@ package sdk
 import (
 	"errors"
 	"fmt"
+	"math"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/larsla/takt/api"
 )
@@ -19,18 +21,69 @@ const (
 
 // CustomError carries an application-defined reason and optional details.
 type CustomError struct {
-	reason  string
-	details Values
+	reason          string
+	details         Values
+	failureCategory api.FailureCategory
+	nextRetryDelay  time.Duration
+}
+
+// CustomErrorOption is passed among the details of NewCustomError to set
+// an option instead of a detail.
+type CustomErrorOption func(*CustomError)
+
+// WithFailureCategory sets the failure category of an activity error.
+// FailureCategoryFatal stops the server from retrying the activity.
+func WithFailureCategory(c api.FailureCategory) CustomErrorOption {
+	return func(e *CustomError) { e.failureCategory = c }
+}
+
+// WithNextRetryDelay sets the delay before the next attempt of the activity
+// that returns the error, in place of the retry policy's backoff. Whether
+// there is a next attempt is still up to the retry policy.
+func WithNextRetryDelay(d time.Duration) CustomErrorOption {
+	return func(e *CustomError) { e.nextRetryDelay = d }
 }
 
 // NewCustomError creates an error with a reason and details. The reason must
-// not start with "cadenceInternal:".
+// not start with "cadenceInternal:". CustomErrorOption values among the
+// details are applied to the error instead.
 func NewCustomError(reason string, details ...interface{}) *CustomError {
 	if strings.HasPrefix(reason, "cadenceInternal:") {
 		panic("'cadenceInternal:' is reserved prefix, please use different reason")
 	}
-	return &CustomError{reason: reason, details: ErrorDetailsValues(details)}
+	if len(details) == 1 {
+		if v, ok := details[0].(*encodedValues); ok {
+			return &CustomError{reason: reason, details: v}
+		}
+	}
+	e := &CustomError{reason: reason}
+	values := make(ErrorDetailsValues, 0, len(details))
+	for _, d := range details {
+		if o, ok := d.(CustomErrorOption); ok {
+			o(e)
+			continue
+		}
+		values = append(values, d)
+	}
+	if details != nil {
+		e.details = values
+	} else {
+		e.details = ErrorDetailsValues(nil)
+	}
+	return e
 }
+
+// GetFailureCategory returns the category set with WithFailureCategory,
+// FailureCategoryStandard by default.
+func (e *CustomError) GetFailureCategory() api.FailureCategory {
+	if e.failureCategory == "" {
+		return api.FailureCategoryStandard
+	}
+	return e.failureCategory
+}
+
+// GetNextRetryDelay returns the delay set with WithNextRetryDelay.
+func (e *CustomError) GetNextRetryDelay() time.Duration { return e.nextRetryDelay }
 
 func (e *CustomError) Error() string { return e.reason }
 
@@ -154,6 +207,55 @@ func (e *ContinueAsNewError) Error() string { return "ContinueAsNew" }
 func IsCanceledError(err error) bool {
 	var ce *CanceledError
 	return errors.As(err, &ce)
+}
+
+// IsCustomError reports whether err is a CustomError.
+func IsCustomError(err error) bool {
+	var e *CustomError
+	return errors.As(err, &e)
+}
+
+// IsGenericError reports whether err is a GenericError.
+func IsGenericError(err error) bool {
+	var e *GenericError
+	return errors.As(err, &e)
+}
+
+// IsTimeoutError reports whether err is a TimeoutError.
+func IsTimeoutError(err error) bool {
+	var e *TimeoutError
+	return errors.As(err, &e)
+}
+
+// IsTerminatedError reports whether err is a TerminatedError.
+func IsTerminatedError(err error) bool {
+	var e *TerminatedError
+	return errors.As(err, &e)
+}
+
+// IsPanicError reports whether err is a PanicError.
+func IsPanicError(err error) bool {
+	var e *PanicError
+	return errors.As(err, &e)
+}
+
+// IsWorkflowExecutionAlreadyStartedError reports whether err says that a
+// workflow with the same ID is already running.
+func IsWorkflowExecutionAlreadyStartedError(err error) bool {
+	var e *api.WorkflowExecutionAlreadyStartedError
+	return errors.As(err, &e)
+}
+
+// failureOptions returns the retry options an activity error carries.
+func failureOptions(err error) *api.FailureOptions {
+	var custom *CustomError
+	if !errors.As(err, &custom) || (custom.failureCategory == "" && custom.nextRetryDelay <= 0) {
+		return nil
+	}
+	return &api.FailureOptions{
+		FailureCategory:          custom.failureCategory,
+		NextRetryIntervalSeconds: int32(min(math.Ceil(custom.nextRetryDelay.Seconds()), math.MaxInt32)),
+	}
 }
 
 var (

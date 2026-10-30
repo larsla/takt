@@ -363,20 +363,30 @@ type RespondActivityTaskCompletedByIDRequest struct {
 }
 
 type RespondActivityTaskFailedRequest struct {
-	TaskToken []byte `json:"taskToken"`
-	Reason    string `json:"reason,omitempty"`
-	Details   []byte `json:"details,omitempty"`
-	Identity  string `json:"identity,omitempty"`
+	TaskToken      []byte          `json:"taskToken"`
+	Reason         string          `json:"reason,omitempty"`
+	Details        []byte          `json:"details,omitempty"`
+	Identity       string          `json:"identity,omitempty"`
+	FailureOptions *FailureOptions `json:"failureOptions,omitempty"`
+}
+
+// FailureOptions change how the server retries a failed activity.
+type FailureOptions struct {
+	FailureCategory FailureCategory `json:"failureCategory,omitempty"`
+	// NextRetryIntervalSeconds replaces the retry policy's backoff before
+	// the next attempt when it is above zero.
+	NextRetryIntervalSeconds int32 `json:"nextRetryIntervalSeconds,omitempty"`
 }
 
 type RespondActivityTaskFailedByIDRequest struct {
-	Domain     string `json:"domain"`
-	WorkflowID string `json:"workflowID"`
-	RunID      string `json:"runID,omitempty"`
-	ActivityID string `json:"activityID"`
-	Reason     string `json:"reason,omitempty"`
-	Details    []byte `json:"details,omitempty"`
-	Identity   string `json:"identity,omitempty"`
+	Domain         string          `json:"domain"`
+	WorkflowID     string          `json:"workflowID"`
+	RunID          string          `json:"runID,omitempty"`
+	ActivityID     string          `json:"activityID"`
+	Reason         string          `json:"reason,omitempty"`
+	Details        []byte          `json:"details,omitempty"`
+	Identity       string          `json:"identity,omitempty"`
+	FailureOptions *FailureOptions `json:"failureOptions,omitempty"`
 }
 
 type RespondActivityTaskCanceledRequest struct {

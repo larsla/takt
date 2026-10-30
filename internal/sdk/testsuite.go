@@ -667,10 +667,15 @@ func (w *testWorkflow) finishActivity(a *testActivity, result []byte, err error,
 	if err != nil && canceled && (errors.Is(err, context.Canceled) || IsCanceledError(err)) {
 		err = ErrCanceled
 	}
-	if a.la == nil && err != nil && !canceled && a.params.retryPolicy != nil {
+	fo := failureOptions(err)
+	fatal := fo != nil && fo.FailureCategory == api.FailureCategoryFatal
+	if a.la == nil && err != nil && !canceled && !fatal && a.params.retryPolicy != nil {
 		reason, _ := errorDetails(err, e.dc())
 		policy := a.params.retryPolicy
 		if backoff, ok := retryBackoff(policy, a.info.Attempt, reason); ok {
+			if fo != nil && fo.NextRetryIntervalSeconds > 0 {
+				backoff = int64(fo.NextRetryIntervalSeconds) * int64(time.Second)
+			}
 			next := a.info.Attempt + 1
 			e.clock.add(time.Duration(backoff), func() { w.startActivity(a, next) })
 			return

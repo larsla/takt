@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -288,5 +289,41 @@ func TestRetryPolicyValidation(t *testing.T) {
 	}
 	if _, ok := localBackoff(good, 2, errors.New("x"), time.Now()); ok {
 		t.Fatal("attempts exhausted")
+	}
+}
+
+func TestErrorHelpers(t *testing.T) {
+	wrap := func(err error) error { return fmt.Errorf("wrapped: %w", err) }
+	cases := []struct {
+		is  func(error) bool
+		err error
+	}{
+		{IsCustomError, NewCustomError("r")},
+		{IsGenericError, &GenericError{err: "g"}},
+		{IsTimeoutError, NewHeartbeatTimeoutError()},
+		{IsTerminatedError, &TerminatedError{}},
+		{IsPanicError, newPanicError("p", "")},
+		{IsCanceledError, NewCanceledError()},
+		{IsWorkflowExecutionAlreadyStartedError, &api.WorkflowExecutionAlreadyStartedError{}},
+	}
+	for i, c := range cases {
+		if !c.is(wrap(c.err)) || c.is(errors.New("other")) {
+			t.Errorf("case %d: %T", i, c.err)
+		}
+	}
+
+	e := NewCustomError("r", 1, WithNextRetryDelay(1500*time.Millisecond), WithFailureCategory(api.FailureCategoryFatal))
+	var n int
+	if e.Details(&n) != nil || n != 1 {
+		t.Fatalf("details %d", n)
+	}
+	if e.GetFailureCategory() != api.FailureCategoryFatal || e.GetNextRetryDelay() != 1500*time.Millisecond {
+		t.Fatalf("options %v %v", e.GetFailureCategory(), e.GetNextRetryDelay())
+	}
+	if fo := failureOptions(e); fo == nil || fo.NextRetryIntervalSeconds != 2 || fo.FailureCategory != api.FailureCategoryFatal {
+		t.Fatalf("failure options %+v", fo)
+	}
+	if NewCustomError("r").GetFailureCategory() != api.FailureCategoryStandard || failureOptions(NewCustomError("r")) != nil {
+		t.Fatal("defaults")
 	}
 }

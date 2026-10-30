@@ -656,3 +656,47 @@ func TestAutoHeartbeat(t *testing.T) {
 		t.Fatalf("result %q, err %v", result, err)
 	}
 }
+
+func failureOptionsActivity(ctx context.Context, mode string) (int32, error) {
+	attempt := GetActivityInfo(ctx).Attempt
+	if attempt > 0 {
+		return attempt, nil
+	}
+	if mode == "fatal" {
+		return 0, NewCustomError("fatal", "detail", WithFailureCategory(api.FailureCategoryFatal))
+	}
+	return 0, NewCustomError("retry soon", WithNextRetryDelay(time.Second))
+}
+
+func failureOptionsWorkflow(ctx Context, mode string) (int32, error) {
+	ctx = WithActivityOptions(ctx, ActivityOptions{
+		ScheduleToStartTimeout: time.Minute, StartToCloseTimeout: time.Minute,
+		// Without WithNextRetryDelay the second attempt would wait an hour.
+		RetryPolicy: &RetryPolicy{InitialInterval: time.Hour, BackoffCoefficient: 1, MaximumAttempts: 5},
+	})
+	var attempt int32
+	err := ExecuteActivity(ctx, failureOptionsActivity, mode).Get(ctx, &attempt)
+	return attempt, err
+}
+
+func TestActivityFailureOptions(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	e.worker(WorkerOptions{}, func(w *Worker) {
+		w.RegisterWorkflow(failureOptionsWorkflow)
+		w.RegisterActivity(failureOptionsActivity)
+	})
+	var attempt int32
+	if err := e.run("next-retry-delay", failureOptionsWorkflow, "delay").Get(e.ctx, &attempt); err != nil || attempt != 1 {
+		t.Fatalf("attempt %d, err %v", attempt, err)
+	}
+	err := e.run("fatal", failureOptionsWorkflow, "fatal").Get(e.ctx, &attempt)
+	var custom *CustomError
+	if !errors.As(err, &custom) || custom.Reason() != "fatal" {
+		t.Fatalf("err %v", err)
+	}
+	var detail string
+	if custom.Details(&detail) != nil || detail != "detail" {
+		t.Fatalf("detail %q", detail)
+	}
+}

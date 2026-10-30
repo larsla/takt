@@ -24,10 +24,33 @@ const (
 	mutableSideEffectMarkerName = "MutableSideEffect"
 )
 
-// nondeterminismError reports workflow code that no longer matches history.
-type nondeterminismError struct{ msg string }
+// NonDeterministicError reports workflow code that no longer matches its
+// history. Reason is "missing replay decision", "extra replay decision" or
+// "mismatch"; HistoryEventText and DecisionText describe the parts that
+// don't match.
+type NonDeterministicError struct {
+	Reason string
 
-func (e *nondeterminismError) Error() string { return "nondeterministic workflow: " + e.msg }
+	WorkflowType string
+	WorkflowID   string
+	RunID        string
+	TaskList     string
+	DomainName   string
+
+	HistoryEventText string
+	DecisionText     string
+}
+
+func (e *NonDeterministicError) Error() string {
+	switch {
+	case e.HistoryEventText != "" && e.DecisionText != "":
+		return "nondeterministic workflow: history event is " + e.HistoryEventText + ", replay decision is " + e.DecisionText
+	case e.HistoryEventText != "":
+		return "nondeterministic workflow: " + e.Reason + " for " + e.HistoryEventText
+	default:
+		return "nondeterministic workflow: " + e.Reason + " for " + e.DecisionText
+	}
+}
 
 // batch is the history of one decision task: the events it reacted to,
 // the DecisionTaskStarted event, and the events its decisions produced.
@@ -344,6 +367,11 @@ func (r *replayer) processBatches(ctx context.Context, batches []*batch, mode re
 			continue
 		}
 		if err := matchReplay(decisions, b.decisionEvents); err != nil {
+			var nd *NonDeterministicError
+			if errors.As(err, &nd) && r.info != nil {
+				nd.WorkflowType, nd.WorkflowID, nd.RunID = r.info.WorkflowType.Name, r.info.WorkflowExecution.ID, r.info.WorkflowExecution.RunID
+				nd.TaskList, nd.DomainName = r.info.TaskListName, r.info.Domain
+			}
 			return nil, err
 		}
 		r.applyDecisionEvents(b.decisionEvents)
@@ -699,12 +727,11 @@ func matchReplay(decisions []*api.Decision, events []*api.HistoryEvent) error {
 	for i := 0; i < len(ds) || i < len(es); i++ {
 		switch {
 		case i >= len(ds):
-			return &nondeterminismError{fmt.Sprintf("missing replay decision for %s (event %d)", es[i].EventType, es[i].EventID)}
+			return &NonDeterministicError{Reason: "missing replay decision", HistoryEventText: fmt.Sprintf("%s (event %d)", es[i].EventType, es[i].EventID)}
 		case i >= len(es):
-			return &nondeterminismError{fmt.Sprintf("extra replay decision for %s", describeDecision(ds[i]))}
+			return &NonDeterministicError{Reason: "extra replay decision", DecisionText: describeDecision(ds[i])}
 		case !decisionMatchesEvent(ds[i], es[i]):
-			return &nondeterminismError{fmt.Sprintf("history event is %s (event %d), replay decision is %s",
-				es[i].EventType, es[i].EventID, describeDecision(ds[i]))}
+			return &NonDeterministicError{Reason: "mismatch", HistoryEventText: fmt.Sprintf("%s (event %d)", es[i].EventType, es[i].EventID), DecisionText: describeDecision(ds[i])}
 		}
 	}
 	return nil

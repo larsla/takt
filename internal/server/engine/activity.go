@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/larsla/takt/api"
 )
@@ -310,9 +311,14 @@ func (e *Engine) RespondActivityTaskCompletedByID(ctx context.Context, req *api.
 	return e.completeActivity(ctx, ref, req.Result, req.Identity)
 }
 
-func (e *Engine) failActivity(ctx context.Context, ref activityRef, reason string, details []byte, identity string) error {
+func (e *Engine) failActivity(ctx context.Context, ref activityRef, reason string, details []byte, identity string, opts *api.FailureOptions) error {
 	return e.updateActivity(ctx, ref, func(t *tx, ai *ActivityInfo) error {
-		if t.retryActivity(ai, reason, details) {
+		retry := opts == nil || opts.FailureCategory != api.FailureCategoryFatal
+		var delay int64
+		if opts != nil && opts.NextRetryIntervalSeconds > 0 {
+			delay = int64(opts.NextRetryIntervalSeconds) * int64(time.Second)
+		}
+		if retry && t.retryActivityAfter(ai, reason, details, delay) {
 			return nil
 		}
 		t.closeActivity(ai, func(startedID int64) *api.HistoryEvent {
@@ -331,7 +337,7 @@ func (e *Engine) RespondActivityTaskFailed(ctx context.Context, req *api.Respond
 	if err != nil {
 		return err
 	}
-	return e.failActivity(ctx, ref, req.Reason, req.Details, req.Identity)
+	return e.failActivity(ctx, ref, req.Reason, req.Details, req.Identity, req.FailureOptions)
 }
 
 func (e *Engine) RespondActivityTaskFailedByID(ctx context.Context, req *api.RespondActivityTaskFailedByIDRequest) error {
@@ -339,7 +345,7 @@ func (e *Engine) RespondActivityTaskFailedByID(ctx context.Context, req *api.Res
 	if err != nil {
 		return err
 	}
-	return e.failActivity(ctx, ref, req.Reason, req.Details, req.Identity)
+	return e.failActivity(ctx, ref, req.Reason, req.Details, req.Identity, req.FailureOptions)
 }
 
 func (e *Engine) cancelActivity(ctx context.Context, ref activityRef, details []byte, identity string) error {
@@ -377,12 +383,29 @@ func (e *Engine) RespondActivityTaskCanceledByID(ctx context.Context, req *api.R
 
 // retryActivity schedules another attempt if the retry policy allows it.
 func (t *tx) retryActivity(ai *ActivityInfo, reason string, details []byte) bool {
+	return t.retryActivityAfter(ai, reason, details, 0)
+}
+
+// retryActivityAfter schedules the next attempt of an activity if its retry
+// policy allows one. A delay above zero replaces the policy's backoff; the
+// policy's expiration still applies.
+func (t *tx) retryActivityAfter(ai *ActivityInfo, reason string, details []byte, delay int64) bool {
 	if ai.RetryPolicy == nil {
 		return false
 	}
-	backoff, ok := nextBackoff(ai.RetryPolicy, ai.Attempt, reason, t.now, ai.ExpirationTime)
+	expiration := ai.ExpirationTime
+	if delay > 0 {
+		if expiration > 0 && t.now+delay > expiration {
+			return false
+		}
+		expiration = 0
+	}
+	backoff, ok := nextBackoff(ai.RetryPolicy, ai.Attempt, reason, t.now, expiration)
 	if !ok {
 		return false
+	}
+	if delay > 0 {
+		backoff = delay
 	}
 	ai.Attempt++
 	ai.Started = false

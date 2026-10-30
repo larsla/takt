@@ -58,6 +58,8 @@ type (
 	ExternalWorkflowExecutionCancelRequestedEventAttributes        = api.ExternalWorkflowExecutionCancelRequestedEventAttributes
 	ExternalWorkflowExecutionSignaledEventAttributes               = api.ExternalWorkflowExecutionSignaledEventAttributes
 	FailWorkflowExecutionDecisionAttributes                        = api.FailWorkflowExecutionDecisionAttributes
+	FailureCategory                                                = api.FailureCategory
+	FailureOptions                                                 = api.FailureOptions
 	GetWorkflowExecutionHistoryRequest                             = api.GetWorkflowExecutionHistoryRequest
 	GetWorkflowExecutionHistoryResponse                            = api.GetWorkflowExecutionHistoryResponse
 	Header                                                         = api.Header
@@ -265,6 +267,9 @@ const (
 	EventTypeWorkflowExecutionTerminated                       = api.EventTypeWorkflowExecutionTerminated
 	EventTypeWorkflowExecutionTimedOut                         = api.EventTypeWorkflowExecutionTimedOut
 	ExternalFailedCauseUnknownExternalWorkflowExecution        = api.ExternalFailedCauseUnknownExternalWorkflowExecution
+	FailureCategoryFatal                                       = api.FailureCategoryFatal
+	FailureCategoryPoll                                        = api.FailureCategoryPoll
+	FailureCategoryStandard                                    = api.FailureCategoryStandard
 	HistoryEventFilterTypeAllEvent                             = api.HistoryEventFilterTypeAllEvent
 	HistoryEventFilterTypeCloseEvent                           = api.HistoryEventFilterTypeCloseEvent
 	ParentClosePolicyAbandon                                   = api.ParentClosePolicyAbandon

@@ -458,7 +458,9 @@ func (c *workflowClient) CompleteActivity(ctx context.Context, taskToken []byte,
 		})
 	}
 	reason, details := errorDetails(err, c.dc)
-	return c.service.RespondActivityTaskFailed(ctx, &api.RespondActivityTaskFailedRequest{TaskToken: taskToken, Reason: reason, Details: details, Identity: c.identity})
+	return c.service.RespondActivityTaskFailed(ctx, &api.RespondActivityTaskFailedRequest{
+		TaskToken: taskToken, Reason: reason, Details: details, Identity: c.identity, FailureOptions: failureOptions(err),
+	})
 }
 
 // CompleteActivityByID is CompleteActivity addressed by activity ID.
@@ -485,6 +487,7 @@ func (c *workflowClient) CompleteActivityByID(ctx context.Context, domain, workf
 	reason, details := errorDetails(err, c.dc)
 	return c.service.RespondActivityTaskFailedByID(ctx, &api.RespondActivityTaskFailedByIDRequest{
 		Domain: domain, WorkflowID: workflowID, RunID: runID, ActivityID: activityID, Reason: reason, Details: details, Identity: c.identity,
+		FailureOptions: failureOptions(err),
 	})
 }
 
