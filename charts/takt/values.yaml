@@ -11,6 +11,11 @@ image:
   digest: ""
   pullPolicy: IfNotPresent
 
+# Rolling update settings. embeddedNats uses Recreate instead.
+rollingUpdate:
+  maxSurge: 25%
+  maxUnavailable: 25%
+
 # Secrets for pulling the image, e.g. [{name: my-registry}].
 imagePullSecrets: []
 

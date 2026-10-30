@@ -10,10 +10,16 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
-  {{- if .Values.embeddedNats.enabled }}
   strategy:
+    {{- if .Values.embeddedNats.enabled }}
     type: Recreate
-  {{- end }}
+    {{- else }}
+    type: RollingUpdate
+    # Set explicitly so that server-side apply owns it and removes it when
+    # switching to embeddedNats, which needs Recreate.
+    rollingUpdate:
+      {{- toYaml .Values.rollingUpdate | nindent 6 }}
+    {{- end }}
   selector:
     matchLabels:
       {{- include "takt.selectorLabels" . | nindent 6 }}
