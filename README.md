@@ -87,7 +87,7 @@ takt dev                                            # embedded, temporary data, 
 
 The web UI has no authentication. It is read-only unless `--ui-write` is set (on by default in `takt dev`). Bind it to a private address.
 
-Every server flag can also come from the environment: `--nats-url` is `TAKT_NATS_URL`, `--metrics-addr` is `TAKT_METRICS_ADDR`.
+Every server flag can also come from the environment: `--nats-url` is `TAKT_NATS_URL`, `--metrics-addr` is `TAKT_METRICS_ADDR`. `--nats-creds` points at a NATS credentials file.
 
 ### Docker
 
@@ -98,6 +98,18 @@ docker run --rm -p 8088:8088 -p 4222:4222 ghcr.io/larsla/takt:<version> dev --na
 docker run --rm ghcr.io/larsla/takt:<version> server --nats-url nats://nats:4222
 make docker        # build takt:dev locally
 ```
+
+### Kubernetes
+
+The chart in [charts/takt](charts/takt) runs `takt server` as a Deployment against an existing NATS cluster. It's published to `oci://ghcr.io/larsla/charts/takt`.
+
+```sh
+helm install takt oci://ghcr.io/larsla/charts/takt --version <version> \
+  --set nats.url=nats://nats.nats:4222 --set nats.streamReplicas=3
+kubectl exec deploy/takt -- /takt domain register --domain default
+```
+
+Pods run as non-root with a read-only root filesystem. [values.yaml](charts/takt/values.yaml) covers the uid/gid (`podSecurityContext`), image registry and repository, pull secrets, extra volumes and mounts, `replicaCount`, the autoscaler, a PodDisruptionBudget, an Ingress for the UI and a Prometheus ServiceMonitor. `embeddedNats.enabled=true` runs NATS inside a single pod for trying things out.
 
 ### Metrics
 

@@ -1,0 +1,35 @@
+{{- if or .Values.ui.enabled .Values.metrics.enabled .Values.embeddedNats.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "takt.fullname" . }}
+  labels:
+    {{- include "takt.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "takt.selectorLabels" . | nindent 4 }}
+  ports:
+    {{- if .Values.ui.enabled }}
+    - name: ui
+      port: {{ .Values.ui.port }}
+      targetPort: ui
+      protocol: TCP
+    {{- end }}
+    {{- if .Values.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+    {{- if .Values.embeddedNats.enabled }}
+    - name: nats
+      port: 4222
+      targetPort: nats
+      protocol: TCP
+    {{- end }}
+{{- end }}

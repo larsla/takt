@@ -1,0 +1,170 @@
+{{- include "takt.validate" . }}
+{{- $healthPort := include "takt.healthPort" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "takt.fullname" . }}
+  labels:
+    {{- include "takt.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  {{- if .Values.embeddedNats.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "takt.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "takt.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "takt.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: takt
+          image: {{ include "takt.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - server
+            {{- if .Values.embeddedNats.enabled }}
+            - --embedded-nats
+            - --nats-host=0.0.0.0
+            - --nats-port=4222
+            - --data-dir=/data
+            {{- end }}
+            {{- with .Values.nats.streamReplicas }}
+            - --replicas={{ . }}
+            {{- end }}
+            - --ui-addr={{ if .Values.ui.enabled }}:{{ .Values.ui.port }}{{ end }}
+            - --metrics-addr={{ if .Values.metrics.enabled }}:{{ .Values.metrics.port }}{{ end }}
+            {{- if .Values.takt.uiWrite }}
+            - --ui-write
+            {{- end }}
+            {{- if .Values.takt.debug }}
+            - --debug
+            {{- end }}
+            {{- with .Values.takt.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Set as environment so "kubectl exec ... /takt domain ..." finds NATS too.
+          env:
+            - name: TAKT_NATS_URL
+              value: {{ if .Values.embeddedNats.enabled }}nats://127.0.0.1:4222{{ else }}{{ .Values.nats.url | quote }}{{ end }}
+            {{- if and .Values.nats.credentials.existingSecret (not .Values.embeddedNats.enabled) }}
+            - name: TAKT_NATS_CREDS
+              value: /etc/takt/nats/{{ .Values.nats.credentials.key }}
+            {{- end }}
+            {{- with .Values.takt.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.takt.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            {{- if .Values.ui.enabled }}
+            - name: ui
+              containerPort: {{ .Values.ui.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.embeddedNats.enabled }}
+            - name: nats
+              containerPort: 4222
+              protocol: TCP
+            {{- end }}
+          {{- if $healthPort }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $healthPort }}
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $healthPort }}
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if or .Values.volumeMounts .Values.embeddedNats.enabled .Values.nats.credentials.existingSecret }}
+          volumeMounts:
+            {{- if .Values.embeddedNats.enabled }}
+            - name: data
+              mountPath: /data
+            {{- else if .Values.nats.credentials.existingSecret }}
+            - name: nats-credentials
+              mountPath: /etc/takt/nats
+              readOnly: true
+            {{- end }}
+            {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+      {{- if or .Values.volumes .Values.embeddedNats.enabled .Values.nats.credentials.existingSecret }}
+      volumes:
+        {{- if .Values.embeddedNats.enabled }}
+        - name: data
+          {{- if .Values.embeddedNats.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.embeddedNats.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- else if .Values.nats.credentials.existingSecret }}
+        - name: nats-credentials
+          secret:
+            secretName: {{ .Values.nats.credentials.existingSecret }}
+            items:
+              - key: {{ .Values.nats.credentials.key }}
+                path: {{ .Values.nats.credentials.key }}
+        {{- end }}
+        {{- with .Values.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

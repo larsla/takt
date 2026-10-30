@@ -1,0 +1,14 @@
+apiVersion: v2
+name: takt
+description: takt, a Cadence-style workflow engine on NATS JetStream
+type: application
+# Both versions are set from the git tag when the chart is released.
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/larsla/takt
+sources:
+  - https://github.com/larsla/takt
+keywords:
+  - workflow
+  - cadence
+  - nats

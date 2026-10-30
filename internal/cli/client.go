@@ -39,11 +39,12 @@ const workflowUsage = `Usage:
 
 // clientFlags are shared by the domain and workflow commands.
 type clientFlags struct {
-	fs      *flag.FlagSet
-	natsURL string
-	domain  string
-	json    bool
-	timeout time.Duration
+	fs        *flag.FlagSet
+	natsURL   string
+	natsCreds string
+	domain    string
+	json      bool
+	timeout   time.Duration
 }
 
 func newClientFlags(name string, stderr io.Writer) *clientFlags {
@@ -58,6 +59,7 @@ func newClientFlags(name string, stderr io.Writer) *clientFlags {
 		dom = "default"
 	}
 	c.fs.StringVar(&c.natsURL, "nats-url", url, "NATS server (env TAKT_NATS_URL)")
+	c.fs.StringVar(&c.natsCreds, "nats-creds", os.Getenv("TAKT_NATS_CREDS"), "NATS credentials file (env TAKT_NATS_CREDS)")
 	c.stringVar(&c.domain, dom, "domain (env TAKT_DOMAIN)", "domain", "do")
 	c.fs.BoolVar(&c.json, "json", false, "print JSON")
 	c.fs.DurationVar(&c.timeout, "timeout", 30*time.Second, "give up after this long")
@@ -80,7 +82,11 @@ func (c *clientFlags) intVar(p *int, value int, usage string, names ...string) {
 }
 
 func (c *clientFlags) connect(ctx context.Context) (api.Service, func(), context.Context, context.CancelFunc, error) {
-	nc, err := nats.Connect(c.natsURL, nats.Name("takt-cli"))
+	opts := []nats.Option{nats.Name("takt-cli")}
+	if c.natsCreds != "" {
+		opts = append(opts, nats.UserCredentials(c.natsCreds))
+	}
+	nc, err := nats.Connect(c.natsURL, opts...)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("connect to nats: %w", err)
 	}

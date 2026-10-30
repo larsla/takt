@@ -1,0 +1,14 @@
+takt is running{{ if .Values.embeddedNats.enabled }} with embedded NATS{{ else }} against {{ .Values.nats.url }}{{ end }}.
+{{- if .Values.ui.enabled }}
+
+Web UI:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "takt.fullname" . }} {{ .Values.ui.port }}
+  open http://127.0.0.1:{{ .Values.ui.port }}
+{{- end }}
+{{- if .Values.embeddedNats.enabled }}
+
+Workers connect to nats://{{ include "takt.fullname" . }}.{{ .Release.Namespace }}.svc:4222
+{{- end }}
+
+Register a domain before starting workflows:
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "takt.fullname" . }} -- /takt domain register --domain default

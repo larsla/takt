@@ -1,0 +1,142 @@
+# Number of takt server pods. The server is stateless, so any number can
+# share one NATS cluster. Ignored when autoscaling is enabled.
+replicaCount: 2
+
+image:
+  # The image is <registry>/<repository>:<tag>, or @<digest> when set.
+  registry: ghcr.io
+  repository: larsla/takt
+  # Defaults to the chart's appVersion.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Secrets for pulling the image, e.g. [{name: my-registry}].
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+nats:
+  # NATS server with JetStream (2.12 or newer). Ignored with embeddedNats.
+  url: nats://nats:4222
+  # Credentials file (JWT and nkey seed) from a secret.
+  credentials:
+    existingSecret: ""
+    key: nats.creds
+  # Replica count for takt's streams and buckets. 0 means 1. Use 3 on a
+  # three node NATS cluster.
+  streamReplicas: 0
+
+# Run NATS inside the takt pod. For trying takt out: it forces a single
+# replica, and data lives in the "data" volume (an emptyDir unless
+# existingClaim is set).
+embeddedNats:
+  enabled: false
+  existingClaim: ""
+
+takt:
+  # Allow signal, cancel and terminate from the web UI. The UI has no
+  # authentication, so keep it off unless the UI is protected.
+  uiWrite: false
+  debug: false
+  # More arguments for "takt server".
+  extraArgs: []
+  # More environment variables. Every server flag has one: --nats-url is
+  # TAKT_NATS_URL.
+  extraEnv: []
+  extraEnvFrom: []
+
+ui:
+  enabled: true
+  port: 8088
+
+metrics:
+  enabled: true
+  port: 9090
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: ""
+    labels: {}
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: takt.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automount: false
+
+podAnnotations: {}
+podLabels: {}
+
+# The image's default user is 65532. Change runAsUser, runAsGroup and
+# fsGroup to run as another uid/gid.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+resources: {}
+#  requests:
+#    cpu: 100m
+#    memory: 128Mi
+#  limits:
+#    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: ""
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: ""
+
+# Probes use /healthz on the metrics port, or on the UI port when metrics
+# are off.
+livenessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  failureThreshold: 3
+
+# Extra volumes and mounts for the takt container, e.g. TLS certificates.
+volumes: []
+volumeMounts: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+terminationGracePeriodSeconds: 30

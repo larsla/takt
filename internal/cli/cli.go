@@ -93,6 +93,7 @@ func version() string {
 
 type serverConfig struct {
 	natsURL      string
+	natsCreds    string
 	embeddedNATS bool
 	natsHost     string
 	natsPort     int
@@ -110,6 +111,7 @@ func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfi
 	fs.SetOutput(stderr)
 	cfg := serverConfig{}
 	fs.StringVar(&cfg.natsURL, "nats-url", nats.DefaultURL, "NATS server to connect to (ignored with -embedded-nats)")
+	fs.StringVar(&cfg.natsCreds, "nats-creds", "", "NATS credentials file (JWT and nkey seed)")
 	fs.BoolVar(&cfg.embeddedNATS, "embedded-nats", mode == "dev", "run a NATS server inside this process")
 	fs.StringVar(&cfg.natsHost, "nats-host", "127.0.0.1", "listen host for embedded NATS")
 	fs.IntVar(&cfg.natsPort, "nats-port", 4222, "listen port for embedded NATS (-1 picks a free port)")
@@ -183,7 +185,11 @@ func runServer(ctx context.Context, mode string, args []string, stderr io.Writer
 		log.Info("embedded nats started", "url", natsURL, "data_dir", cfg.dataDir)
 	}
 
-	nc, err := nats.Connect(natsURL, nats.Name("takt-server"), nats.MaxReconnects(-1))
+	natsOpts := []nats.Option{nats.Name("takt-server"), nats.MaxReconnects(-1)}
+	if cfg.natsCreds != "" && !cfg.embeddedNATS {
+		natsOpts = append(natsOpts, nats.UserCredentials(cfg.natsCreds))
+	}
+	nc, err := nats.Connect(natsURL, natsOpts...)
 	if err != nil {
 		return fmt.Errorf("connect to nats: %w", err)
 	}
