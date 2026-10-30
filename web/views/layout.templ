@@ -1,6 +1,8 @@
 package views
 
-templ Layout(title string) {
+import "net/url"
+
+templ Layout(title string, nav Nav) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
@@ -12,14 +14,48 @@ templ Layout(title string) {
 		</head>
 		<body class="min-h-screen">
 			<header class="border-b">
-				<nav class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3 text-sm">
-					<a href="/" class="font-semibold">takt</a>
-					<a href="/" class="text-muted-foreground hover:text-foreground">Cluster</a>
+				<nav class="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
+					<a href="/" class="font-semibold tracking-tight">takt</a>
+					@navLink("/domains", "Domains", nav.Active == "domains")
+					if nav.Domain != "" {
+						<span class="text-muted-foreground">/</span>
+						<span class="font-medium">{ nav.Domain }</span>
+						@navLink(domainPath(nav.Domain, "workflows"), "Workflows", nav.Active == "workflows")
+						@navLink(domainPath(nav.Domain, "cron"), "Cron", nav.Active == "cron")
+						@navLink(domainPath(nav.Domain, "tasklists"), "Task lists", nav.Active == "tasklists")
+					}
+					<span class="ml-auto"></span>
+					@navLink("/cluster", "Cluster", nav.Active == "cluster")
 				</nav>
 			</header>
-			<main class="mx-auto max-w-6xl px-4 py-6">
+			<main class="mx-auto max-w-7xl px-4 py-6">
 				{ children... }
 			</main>
 		</body>
 	</html>
+}
+
+templ navLink(href, label string, active bool) {
+	if active {
+		<a href={ templ.SafeURL(href) } aria-current="page" class="font-medium text-foreground">{ label }</a>
+	} else {
+		<a href={ templ.SafeURL(href) } class="text-muted-foreground hover:text-foreground">{ label }</a>
+	}
+}
+
+func domainPath(domain, page string) string {
+	return "/domains/" + url.PathEscape(domain) + "/" + page
+}
+
+// PageHeader is the title row of a page.
+templ PageHeader(title, subtitle string) {
+	<div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+		<div class="min-w-0">
+			<h1 class="truncate text-2xl font-semibold tracking-tight">{ title }</h1>
+			if subtitle != "" {
+				<p class="mt-1 truncate font-mono text-sm text-muted-foreground">{ subtitle }</p>
+			}
+		</div>
+		{ children... }
+	</div>
 }

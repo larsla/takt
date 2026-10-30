@@ -1,0 +1,294 @@
+package views
+
+import (
+	"net/url"
+	"strconv"
+
+	"github.com/larsla/takt/web/components/ui"
+)
+
+func wfPartial(w Workflow, part string) string {
+	q := url.Values{"id": {w.WorkflowID}, "run": {w.RunID}}
+	return "/partials/domains/" + url.PathEscape(w.Nav.Domain) + "/workflow/" + part + "?" + q.Encode()
+}
+
+func wfAction(w Workflow, action string) string {
+	return "/domains/" + url.PathEscape(w.Nav.Domain) + "/workflow/" + action
+}
+
+templ WorkflowPage(w Workflow) {
+	@Layout(w.WorkflowID, w.Nav) {
+		@PageHeader(w.WorkflowID, w.RunID) {
+			if w.Status != "" {
+				@ui.Badge(StatusVariant(w.Status), w.Status)
+			}
+		}
+		if w.Error != "" {
+			@ui.Alert("destructive", "Could not load workflow") {
+				{ w.Error }
+			}
+		} else {
+			<div class="flex flex-col gap-6">
+				@WorkflowSummary(w)
+				@ui.Card() {
+					@ui.CardHeader("History", "Events in order. Expand one for its attributes.")
+					@ui.CardContent() {
+						@WorkflowHistory(w)
+					}
+				}
+				<div class="grid gap-6 lg:grid-cols-2">
+					@ui.Card() {
+						@ui.CardHeader("Stack trace", "Where each workflow goroutine is blocked, from a __stack_trace query.")
+						@ui.CardContent() {
+							<div id="stack">
+								@ui.Button("outline", "sm", templ.Attributes{"hx-get": wfPartial(w, "stack"), "hx-target": "#stack"}) {
+									Load stack trace
+								}
+							</div>
+						}
+					}
+					@ui.Card() {
+						@ui.CardHeader("Query", "Runs a query handler on a worker.")
+						@ui.CardContent() {
+							<form class="grid gap-3" hx-post={ wfAction(w, "query") } hx-target="#query-result">
+								@hiddenRun(w)
+								@ui.Field("q-type", "Query type") {
+									@ui.Input(templ.Attributes{"id": "q-type", "name": "type", "required": true, "placeholder": "state"})
+								}
+								@ui.Field("q-args", "Arguments (JSON, one value per line)") {
+									@ui.Textarea(templ.Attributes{"id": "q-args", "name": "args", "rows": "2"})
+								}
+								<div>
+									@ui.Button("default", "sm", templ.Attributes{"type": "submit"}) {
+										Run query
+									}
+								</div>
+								<div id="query-result"></div>
+							</form>
+						}
+					}
+				</div>
+				if w.CanWrite && w.Running {
+					@workflowActions(w)
+				}
+			</div>
+		}
+	}
+}
+
+templ hiddenRun(w Workflow) {
+	<input type="hidden" name="id" value={ w.WorkflowID }/>
+	<input type="hidden" name="run" value={ w.RunID }/>
+}
+
+// WorkflowSummary refreshes itself while the workflow runs.
+templ WorkflowSummary(w Workflow) {
+	<div id="summary" class="flex flex-col gap-6" if w.Running { hx-get={ wfPartial(w, "summary") } hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" }>
+		@ui.Card() {
+			@ui.CardContent() {
+				<dl class="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+					for _, f := range w.Fields {
+						<div class="min-w-0">
+							<dt class="text-xs text-muted-foreground">{ f.Label }</dt>
+							<dd class={ "truncate text-sm", templ.KV("font-mono", f.Mono) } title={ f.Value }>
+								if f.Href != "" {
+									<a class="underline-offset-4 hover:underline" href={ templ.SafeURL(f.Href) }>{ f.Value }</a>
+								} else {
+									{ f.Value }
+								}
+							</dd>
+						</div>
+					}
+				</dl>
+			}
+		}
+		if len(w.Payloads) > 0 {
+			<div class="grid gap-6 lg:grid-cols-2">
+				for _, p := range w.Payloads {
+					@ui.Card() {
+						@ui.CardHeader(p.Label, "")
+						@ui.CardContent() {
+							<pre class="max-h-80 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">{ p.Body }</pre>
+						}
+					}
+				}
+			</div>
+		}
+		if len(w.Activities) > 0 {
+			@ui.Card() {
+				@ui.CardHeader("Pending activities", "")
+				@ui.CardContent() {
+					@ui.Table() {
+						@ui.TableHeader("Activity", "State", "Attempt", "Scheduled", "Last heartbeat", "Last failure", "Worker")
+						@ui.TableBody() {
+							for _, a := range w.Activities {
+								@ui.TableRow() {
+									@ui.TableCell() {
+										<div class="font-mono">{ a.Type }</div>
+										<div class="text-xs text-muted-foreground">id { a.ID }</div>
+									}
+									@ui.TableCell() {
+										@ui.Badge("outline", a.State)
+									}
+									@ui.TableCell() {
+										{ attemptText(a) }
+									}
+									@ui.TableCell() {
+										<span title={ Stamp(a.Scheduled) }>{ Ago(a.Scheduled) }</span>
+									}
+									@ui.TableCell() {
+										<span title={ a.Heartbeat }>{ Ago(a.LastHeartbeat) }</span>
+									}
+									@ui.TableCell() {
+										<span class="text-destructive">{ a.LastFailure }</span>
+									}
+									@ui.TableCell() {
+										<span class="font-mono text-xs">{ a.Worker }</span>
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if len(w.Children) > 0 {
+			@ui.Card() {
+				@ui.CardHeader("Pending child workflows", "")
+				@ui.CardContent() {
+					<ul class="grid gap-2 text-sm">
+						for _, c := range w.Children {
+							<li>
+								<a class="font-mono underline-offset-4 hover:underline" href={ templ.SafeURL(c.Href) }>{ c.WorkflowID }</a>
+								<span class="text-muted-foreground">{ c.Type }</span>
+							</li>
+						}
+					</ul>
+				}
+			}
+		}
+		if w.Decision != "" {
+			<p class="text-sm text-muted-foreground">Decision task { w.Decision }.</p>
+		}
+	</div>
+}
+
+func attemptText(a Activity) string {
+	s := strconv.Itoa(int(a.Attempt) + 1)
+	if a.MaxAttempts > 0 {
+		s += " of " + strconv.Itoa(int(a.MaxAttempts))
+	}
+	return s
+}
+
+func eventColor(category string) string {
+	switch category {
+	case "decision":
+		return "bg-muted-foreground/40"
+	case "activity":
+		return "bg-sky-500"
+	case "timer":
+		return "bg-amber-500"
+	case "child":
+		return "bg-violet-500"
+	case "signal":
+		return "bg-emerald-500"
+	case "workflow":
+		return "bg-foreground"
+	}
+	return "bg-muted-foreground"
+}
+
+// WorkflowHistory refreshes itself while the workflow runs.
+templ WorkflowHistory(w Workflow) {
+	<div id="history" if w.Running { hx-get={ wfPartial(w, "history") } hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" }>
+		if len(w.Events) == 0 {
+			<p class="text-sm text-muted-foreground">No events.</p>
+		}
+		<ol class="grid gap-1">
+			for _, e := range w.Events {
+				<li>
+					<details class="group rounded-md border px-3 py-2 open:bg-muted/40">
+						<summary class="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+							<span class="w-10 shrink-0 text-right font-mono text-xs text-muted-foreground">{ strconv.FormatInt(e.ID, 10) }</span>
+							<span class={ "size-2 shrink-0 rounded-full", eventColor(e.Category) } aria-hidden="true"></span>
+							<span class="font-medium">{ e.Type }</span>
+							<span class="min-w-0 truncate font-mono text-xs text-muted-foreground">{ e.Summary }</span>
+							<span class="ml-auto font-mono text-xs text-muted-foreground" title={ Stamp(e.Time) }>{ e.Offset }</span>
+						</summary>
+						<pre class="mt-2 max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">{ e.JSON }</pre>
+					</details>
+				</li>
+			}
+		</ol>
+	</div>
+}
+
+templ StackTrace(trace, errMsg string) {
+	if errMsg != "" {
+		@ui.Alert("destructive", "Stack trace failed") {
+			{ errMsg }
+		}
+	} else {
+		<pre class="max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">{ trace }</pre>
+	}
+}
+
+templ ActionResult(r QueryResult) {
+	if r.OK {
+		@ui.Alert("", r.Message) {
+			if r.Body != "" {
+				<pre class="max-h-80 w-full overflow-auto rounded-md bg-muted p-3 font-mono text-xs">{ r.Body }</pre>
+			}
+		}
+	} else {
+		@ui.Alert("destructive", "Failed") {
+			{ r.Message }
+		}
+	}
+}
+
+templ workflowActions(w Workflow) {
+	@ui.Card() {
+		@ui.CardHeader("Actions", "These change the workflow.")
+		@ui.CardContent() {
+			<div class="grid gap-6 lg:grid-cols-3">
+				<form class="grid gap-3" hx-post={ wfAction(w, "signal") } hx-target="#action-result">
+					@hiddenRun(w)
+					@ui.Field("s-name", "Signal name") {
+						@ui.Input(templ.Attributes{"id": "s-name", "name": "name", "required": true})
+					}
+					@ui.Field("s-input", "Input (JSON)") {
+						@ui.Textarea(templ.Attributes{"id": "s-input", "name": "input", "rows": "2"})
+					}
+					<div>
+						@ui.Button("secondary", "sm", templ.Attributes{"type": "submit"}) {
+							Send signal
+						}
+					</div>
+				</form>
+				<form class="grid content-start gap-3" hx-post={ wfAction(w, "cancel") } hx-target="#action-result" hx-confirm="Request cancellation of this workflow?">
+					@hiddenRun(w)
+					<p class="text-sm text-muted-foreground">Cancellation lets the workflow clean up before it closes.</p>
+					<div>
+						@ui.Button("outline", "sm", templ.Attributes{"type": "submit"}) {
+							Request cancellation
+						}
+					</div>
+				</form>
+				<form class="grid gap-3" hx-post={ wfAction(w, "terminate") } hx-target="#action-result" hx-confirm="Terminate this workflow now? It gets no chance to clean up.">
+					@hiddenRun(w)
+					@ui.Field("t-reason", "Reason") {
+						@ui.Input(templ.Attributes{"id": "t-reason", "name": "reason", "placeholder": "terminated from the web UI"})
+					}
+					<div>
+						@ui.Button("destructive", "sm", templ.Attributes{"type": "submit"}) {
+							Terminate
+						}
+					</div>
+				</form>
+			</div>
+			<div id="action-result" class="mt-4"></div>
+		}
+	}
+}

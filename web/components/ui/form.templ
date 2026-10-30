@@ -1,0 +1,27 @@
+package ui
+
+// Form controls follow shadcn-htmx's input, textarea, select and label.
+
+const inputClass = "flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+
+const textareaClass = "flex field-sizing-content min-h-16 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base font-mono shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
+
+templ Input(attrs templ.Attributes) {
+	<input data-slot="input" class={ inputClass } { attrs... }/>
+}
+
+templ Textarea(attrs templ.Attributes) {
+	<textarea data-slot="textarea" class={ textareaClass } { attrs... }></textarea>
+}
+
+templ Label(forID, text string) {
+	<label data-slot="label" for={ forID } class="flex items-center gap-2 text-sm leading-none font-medium select-none">{ text }</label>
+}
+
+// Field stacks a label above a control.
+templ Field(forID, label string) {
+	<div class="grid gap-2">
+		@Label(forID, label)
+		{ children... }
+	</div>
+}

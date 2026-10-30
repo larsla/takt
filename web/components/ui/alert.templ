@@ -1,0 +1,29 @@
+package ui
+
+// Alert markup follows shadcn-htmx's alert component.
+
+func alertClass(variant string) string {
+	if variant == "destructive" {
+		return "relative grid w-full items-start gap-y-0.5 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+	}
+	return "relative grid w-full items-start gap-y-0.5 rounded-lg border bg-card px-4 py-3 text-sm text-card-foreground"
+}
+
+// Alert shows a message. Variant is "" or destructive.
+templ Alert(variant, title string) {
+	<div data-slot="alert" role={ alertRole(variant) } class={ alertClass(variant) }>
+		if title != "" {
+			<div data-slot="alert-title" class="font-medium tracking-tight">{ title }</div>
+		}
+		<div data-slot="alert-description" class="grid justify-items-start gap-1 text-sm opacity-90">
+			{ children... }
+		</div>
+	</div>
+}
+
+func alertRole(variant string) string {
+	if variant == "destructive" {
+		return "alert"
+	}
+	return "status"
+}

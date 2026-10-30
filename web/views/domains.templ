@@ -1,0 +1,47 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/larsla/takt/web/components/ui"
+)
+
+templ DomainsPage(nav Nav, rows []DomainRow, errMsg string) {
+	@Layout("Domains", nav) {
+		@PageHeader("Domains", "")
+		if errMsg != "" {
+			@ui.Alert("destructive", "Could not load domains") {
+				{ errMsg }
+			}
+		}
+		@ui.Card() {
+			@ui.CardContent() {
+				if len(rows) == 0 {
+					<p class="text-sm text-muted-foreground">No domains yet. Register one with <code class="font-mono">takt domain register</code>.</p>
+				} else {
+					@ui.Table() {
+						@ui.TableHeader("Name", "Description", "Retention", "Open workflows")
+						@ui.TableBody() {
+							for _, d := range rows {
+								@ui.TableRow() {
+									@ui.TableCell() {
+										<a class="font-medium underline-offset-4 hover:underline" href={ templ.SafeURL(domainPath(d.Name, "workflows")) }>{ d.Name }</a>
+									}
+									@ui.TableCell() {
+										<span class="text-muted-foreground">{ d.Description }</span>
+									}
+									@ui.TableCell() {
+										{ strconv.Itoa(int(d.RetentionDays)) } days
+									}
+									@ui.TableCell() {
+										{ strconv.FormatInt(d.Open, 10) }
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

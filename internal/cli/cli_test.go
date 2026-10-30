@@ -72,7 +72,7 @@ func TestDevServesUI(t *testing.T) {
 		t.Fatal("server not ready")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+info.UIAddr+"/", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+info.UIAddr+"/domains", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestDevServesUI(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "TAKT_HISTORY") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), ">default<") {
 		t.Fatalf("status %d, body %.200s", resp.StatusCode, body)
 	}
 

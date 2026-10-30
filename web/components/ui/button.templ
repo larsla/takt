@@ -1,0 +1,43 @@
+package ui
+
+// Button markup follows shadcn-htmx's button component.
+
+const buttonBase = "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&.htmx-request]:pointer-events-none [&.htmx-request]:opacity-70"
+
+func buttonClass(variant, size string) string {
+	v := map[string]string{
+		"default":     "bg-primary text-primary-foreground hover:bg-primary/90",
+		"destructive": "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+		"outline":     "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+		"secondary":   "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+		"ghost":       "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+		"link":        "text-primary underline-offset-4 hover:underline",
+	}[variant]
+	if v == "" {
+		v = "bg-primary text-primary-foreground hover:bg-primary/90"
+	}
+	s := map[string]string{
+		"sm": "h-8 gap-1.5 rounded-md px-3",
+		"xs": "h-6 gap-1 rounded-md px-2 text-xs",
+		"lg": "h-10 rounded-md px-6",
+	}[size]
+	if s == "" {
+		s = "h-9 px-4 py-2"
+	}
+	return buttonBase + " " + v + " " + s
+}
+
+// Button renders a <button>. Variant is default, destructive, outline,
+// secondary, ghost or link; size is sm, xs, lg or "".
+templ Button(variant, size string, attrs templ.Attributes) {
+	<button type="button" data-slot="button" data-variant={ variant } class={ buttonClass(variant, size) } { attrs... }>
+		{ children... }
+	</button>
+}
+
+// LinkButton renders an <a> styled as a button.
+templ LinkButton(variant, size, href string) {
+	<a href={ templ.SafeURL(href) } data-slot="button" data-variant={ variant } class={ buttonClass(variant, size) }>
+		{ children... }
+	</a>
+}

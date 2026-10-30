@@ -1,0 +1,174 @@
+package views
+
+import (
+	"net/url"
+	"strconv"
+
+	"github.com/larsla/takt/web/components/ui"
+)
+
+func listURL(l WorkflowList, partial bool, status, token string) string {
+	q := url.Values{}
+	q.Set("status", status)
+	if l.WorkflowID != "" {
+		q.Set("id", l.WorkflowID)
+	}
+	if l.Type != "" {
+		q.Set("type", l.Type)
+	}
+	if l.Query != "" {
+		q.Set("query", l.Query)
+	}
+	if token != "" {
+		q.Set("page", token)
+	}
+	base := domainPath(l.Nav.Domain, "workflows")
+	if partial {
+		base = "/partials" + base
+	}
+	return base + "?" + q.Encode()
+}
+
+templ WorkflowsPage(l WorkflowList) {
+	@Layout("Workflows", l.Nav) {
+		@PageHeader("Workflows", l.Nav.Domain)
+		<div class="mb-4 flex flex-wrap gap-1 border-b" role="tablist">
+			for _, tab := range []string{"open", "closed", "all"} {
+				@statusTab(l, tab)
+			}
+		</div>
+		<form class="mb-4 grid gap-3 md:grid-cols-[1fr_1fr_2fr_auto] md:items-end" hx-get={ listURL(WorkflowList{Nav: l.Nav}, true, l.Status, "") } hx-target="#results" hx-push-url={ listURL(WorkflowList{Nav: l.Nav}, false, l.Status, "") }>
+			<input type="hidden" name="status" value={ l.Status }/>
+			@ui.Field("f-id", "Workflow ID") {
+				@ui.Input(templ.Attributes{"id": "f-id", "name": "id", "value": l.WorkflowID, "placeholder": "exact ID"})
+			}
+			@ui.Field("f-type", "Workflow type") {
+				@ui.Input(templ.Attributes{"id": "f-type", "name": "type", "value": l.Type, "placeholder": "main.orderWorkflow"})
+			}
+			@ui.Field("f-query", "Query") {
+				@ui.Input(templ.Attributes{"id": "f-query", "name": "query", "value": l.Query, "placeholder": "CloseStatus = 'FAILED' AND StartTime > '2026-01-01T00:00:00Z'"})
+			}
+			@ui.Button("default", "", templ.Attributes{"type": "submit"}) {
+				Filter
+			}
+		</form>
+		<div id="results">
+			@WorkflowResults(l)
+		</div>
+	}
+}
+
+templ statusTab(l WorkflowList, tab string) {
+	if l.Status == tab {
+		<a role="tab" aria-selected="true" href={ templ.SafeURL(listURL(l, false, tab, "")) } class="-mb-px border-b-2 border-foreground px-3 py-2 text-sm font-medium capitalize">{ tab }</a>
+	} else {
+		<a role="tab" aria-selected="false" href={ templ.SafeURL(listURL(l, false, tab, "")) } class="-mb-px border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground capitalize hover:text-foreground">{ tab }</a>
+	}
+}
+
+// WorkflowResults is the table part, refreshed in place.
+templ WorkflowResults(l WorkflowList) {
+	<div hx-get={ listURL(l, true, l.Status, "") } hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML">
+		if l.Error != "" {
+			@ui.Alert("destructive", "Query failed") {
+				{ l.Error }
+			}
+		} else {
+			@ui.Card() {
+				@ui.CardContent() {
+					<p class="mb-3 text-sm text-muted-foreground">{ strconv.FormatInt(l.Count, 10) } matching</p>
+					if len(l.Rows) == 0 {
+						<p class="text-sm text-muted-foreground">No workflows match.</p>
+					} else {
+						@WorkflowTable(l.Nav.Domain, l.Rows)
+					}
+					if l.NextToken != "" {
+						<div class="mt-4">
+							@ui.LinkButton("outline", "sm", listURL(l, false, l.Status, l.NextToken)) {
+								Next page
+							}
+						</div>
+					}
+				}
+			}
+		}
+	</div>
+}
+
+templ WorkflowTable(domain string, rows []WorkflowRow) {
+	@ui.Table() {
+		@ui.TableHeader("Workflow ID", "Run", "Type", "Status", "Started", "Closed", "Events")
+		@ui.TableBody() {
+			for _, r := range rows {
+				@ui.TableRow() {
+					@ui.TableCell() {
+						<a class="font-mono underline-offset-4 hover:underline" href={ templ.SafeURL(WorkflowHref(domain, r.WorkflowID, r.RunID)) }>{ r.WorkflowID }</a>
+					}
+					@ui.TableCell() {
+						<span class="font-mono text-muted-foreground" title={ r.RunID }>{ ShortID(r.RunID) }</span>
+					}
+					@ui.TableCell() {
+						<span class="font-mono">{ r.Type }</span>
+					}
+					@ui.TableCell() {
+						@ui.Badge(StatusVariant(r.Status), r.Status)
+					}
+					@ui.TableCell() {
+						<span title={ Stamp(r.Start) }>{ Ago(r.Start) }</span>
+					}
+					@ui.TableCell() {
+						<span title={ Stamp(r.Close) }>{ Ago(r.Close) }</span>
+					}
+					@ui.TableCell() {
+						if r.Status != "RUNNING" {
+							{ strconv.FormatInt(r.HistoryLen, 10) }
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+templ CronPage(nav Nav, rows []WorkflowRow, errMsg string) {
+	@Layout("Cron", nav) {
+		@PageHeader("Cron workflows", nav.Domain)
+		if errMsg != "" {
+			@ui.Alert("destructive", "Could not load cron workflows") {
+				{ errMsg }
+			}
+		}
+		@ui.Card() {
+			@ui.CardContent() {
+				if len(rows) == 0 {
+					<p class="text-sm text-muted-foreground">No running workflows have a cron schedule.</p>
+				} else {
+					@ui.Table() {
+						@ui.TableHeader("Workflow ID", "Type", "Schedule", "Next run", "Current run started")
+						@ui.TableBody() {
+							for _, r := range rows {
+								@ui.TableRow() {
+									@ui.TableCell() {
+										<a class="font-mono underline-offset-4 hover:underline" href={ templ.SafeURL(WorkflowHref(nav.Domain, r.WorkflowID, r.RunID)) }>{ r.WorkflowID }</a>
+									}
+									@ui.TableCell() {
+										<span class="font-mono">{ r.Type }</span>
+									}
+									@ui.TableCell() {
+										<code class="font-mono">{ r.CronSchedule }</code>
+									}
+									@ui.TableCell() {
+										<span title={ Stamp(r.Execution) }>{ Ago(r.Execution) }</span>
+									}
+									@ui.TableCell() {
+										<span title={ Stamp(r.Start) }>{ Ago(r.Start) }</span>
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}

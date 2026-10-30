@@ -32,6 +32,8 @@ Usage:
 Commands:
   dev       run server, embedded NATS and web UI for local development
   server    run the takt server
+  domain    register, describe and list domains
+  workflow  start, list, inspect, signal, query, cancel and terminate workflows
   version   print the version
 
 Run "takt <command> -h" for the flags of a command.
@@ -49,6 +51,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = runServer(ctx, "dev", args[1:], stderr, nil)
 	case "server":
 		err = runServer(ctx, "server", args[1:], stderr, nil)
+	case "domain":
+		err = runDomain(ctx, args[1:], stdout, stderr)
+	case "workflow", "wf":
+		err = runWorkflow(ctx, args[1:], stdout, stderr)
 	case "version":
 		_, _ = fmt.Fprintln(stdout, version())
 	case "help", "-h", "--help":
@@ -84,6 +90,7 @@ type serverConfig struct {
 	replicas     int
 	debug        bool
 	devDomain    string
+	uiWrite      bool
 }
 
 func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfig, error) {
@@ -97,6 +104,7 @@ func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfi
 	fs.StringVar(&cfg.dataDir, "data-dir", "", "JetStream store dir for embedded NATS (empty: temporary dir)")
 	fs.StringVar(&cfg.uiAddr, "ui-addr", "127.0.0.1:8088", "web UI listen address (empty disables the UI)")
 	fs.IntVar(&cfg.replicas, "replicas", 0, "replica count for streams and buckets (0: 1)")
+	fs.BoolVar(&cfg.uiWrite, "ui-write", mode == "dev", "allow signal, cancel and terminate from the web UI")
 	fs.BoolVar(&cfg.debug, "debug", false, "verbose logging")
 	if mode == "dev" {
 		fs.StringVar(&cfg.devDomain, "domain", "default", "domain to register on startup")
@@ -180,7 +188,7 @@ func runServer(ctx context.Context, mode string, args []string, stderr io.Writer
 			return fmt.Errorf("ui listen: %w", err)
 		}
 		srv = &http.Server{
-			Handler:           web.New(web.Options{NC: nc, JS: js, Logger: log}),
+			Handler:           web.New(web.Options{NC: nc, JS: js, Backend: takt.Engine(), Logger: log, AllowWrite: cfg.uiWrite}),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		info.UIAddr = ln.Addr().String()

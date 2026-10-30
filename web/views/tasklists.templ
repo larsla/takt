@@ -1,0 +1,91 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/larsla/takt/web/components/ui"
+)
+
+templ TaskListsPage(t TaskLists) {
+	@Layout("Task lists", t.Nav) {
+		@PageHeader("Task lists", t.Nav.Domain)
+		if t.Error != "" {
+			@ui.Alert("destructive", "Could not load task lists") {
+				{ t.Error }
+			}
+		}
+		<div hx-get={ "/partials" + domainPath(t.Nav.Domain, "tasklists") } hx-trigger="every 5s" hx-target="#tasklists" hx-swap="outerHTML">
+			@TaskListsBody(t)
+		</div>
+	}
+}
+
+// TaskListsBody is the refreshed part of the task lists page.
+templ TaskListsBody(t TaskLists) {
+	<div id="tasklists">
+		@ui.Card() {
+			@ui.CardContent() {
+				if len(t.Lists) == 0 {
+					<p class="text-sm text-muted-foreground">No task lists have pollers or waiting tasks.</p>
+				} else {
+					@ui.Table() {
+						@ui.TableHeader("Task list", "Type", "Pollers", "Backlog")
+						@ui.TableBody() {
+							for _, l := range t.Lists {
+								@ui.TableRow() {
+									@ui.TableCell() {
+										<a class="font-mono underline-offset-4 hover:underline" href={ templ.SafeURL(l.Href) }>{ l.Name }</a>
+									}
+									@ui.TableCell() {
+										{ l.Type }
+									}
+									@ui.TableCell() {
+										{ strconv.Itoa(l.Pollers) }
+									}
+									@ui.TableCell() {
+										{ strconv.FormatInt(l.Backlog, 10) }
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	</div>
+}
+
+templ TaskListPage(t TaskLists) {
+	@Layout(t.Name, t.Nav) {
+		@PageHeader(t.Name, t.Kind+" task list")
+		if t.Error != "" {
+			@ui.Alert("destructive", "Could not load task list") {
+				{ t.Error }
+			}
+		}
+		@ui.Card() {
+			@ui.CardHeader("Pollers", "Workers that polled in the last minute.")
+			@ui.CardContent() {
+				if len(t.Polls) == 0 {
+					<p class="text-sm text-muted-foreground">No pollers.</p>
+				} else {
+					@ui.Table() {
+						@ui.TableHeader("Identity", "Last poll")
+						@ui.TableBody() {
+							for _, p := range t.Polls {
+								@ui.TableRow() {
+									@ui.TableCell() {
+										<span class="font-mono">{ p.Identity }</span>
+									}
+									@ui.TableCell() {
+										<span title={ Stamp(p.LastAccess) }>{ Ago(p.LastAccess) }</span>
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
