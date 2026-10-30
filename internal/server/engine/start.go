@@ -62,7 +62,9 @@ func (e *Engine) StartWorkflowExecution(ctx context.Context, req *api.StartWorkf
 		policy:     req.WorkflowIDReusePolicy,
 		attrs: e.startAttrs(req.WorkflowType, req.TaskList, req.Input, req.ExecutionStartToCloseTimeoutSeconds,
 			req.TaskStartToCloseTimeoutSeconds, req.Identity, req.RequestID, req.RetryPolicy, req.CronSchedule,
-			req.Memo, req.SearchAttributes, req.Header, req.DelayStartSeconds),
+			req.Memo, req.SearchAttributes, req.Header, startTiming{
+				delay: req.DelayStartSeconds, jitter: req.JitterStartSeconds, firstRunAt: req.FirstRunAtTimestamp, overlap: req.CronOverlapPolicy,
+			}),
 	})
 	if err != nil {
 		return nil, err
@@ -70,9 +72,19 @@ func (e *Engine) StartWorkflowExecution(ctx context.Context, req *api.StartWorkf
 	return &api.StartWorkflowExecutionResponse{RunID: runID}, nil
 }
 
+// startTiming says when the first run of a workflow starts and how a cron
+// workflow treats fire times it misses.
+type startTiming struct {
+	delay, jitter int32
+	// firstRunAt, in Unix nanoseconds, replaces delay and jitter for the
+	// first run.
+	firstRunAt int64
+	overlap    api.CronOverlapPolicy
+}
+
 func (e *Engine) startAttrs(wt *api.WorkflowType, tl *api.TaskList, input []byte, execTimeout, taskTimeout int32,
 	identity, requestID string, retry *api.RetryPolicy, cron string, memo *api.Memo, sa *api.SearchAttributes,
-	header *api.Header, delay int32) *api.WorkflowExecutionStartedEventAttributes {
+	header *api.Header, timing startTiming) *api.WorkflowExecutionStartedEventAttributes {
 	if taskTimeout == 0 {
 		taskTimeout = 10
 	}
@@ -89,13 +101,19 @@ func (e *Engine) startAttrs(wt *api.WorkflowType, tl *api.TaskList, input []byte
 		SearchAttributes:                    sa,
 		Header:                              header,
 		RequestID:                           requestID,
-		FirstDecisionTaskBackoffSeconds:     max(delay, 0),
+		CronOverlapPolicy:                   timing.overlap,
+		JitterStartSeconds:                  max(timing.jitter, 0),
+	}
+	switch {
+	case timing.firstRunAt > 0:
+		a.FirstDecisionTaskBackoffSeconds = ceilSeconds(max(timing.firstRunAt-e.nowNano(), 0))
+	case timing.delay > 0 || cron == "":
+		a.FirstDecisionTaskBackoffSeconds = max(timing.delay, 0) + jitter(timing.jitter)
+	default:
+		a.FirstDecisionTaskBackoffSeconds = cronBackoff(cron, e.now()) + jitter(timing.jitter)
 	}
 	if a.RetryPolicy != nil && a.RetryPolicy.ExpirationIntervalInSeconds > 0 {
 		a.ExpirationTimestamp = e.nowNano() + seconds(a.RetryPolicy.ExpirationIntervalInSeconds)
-	}
-	if cron != "" && delay <= 0 {
-		a.FirstDecisionTaskBackoffSeconds = cronBackoff(cron, e.now())
 	}
 	return a
 }
@@ -325,7 +343,9 @@ func (e *Engine) SignalWithStartWorkflowExecution(ctx context.Context, req *api.
 			signal:     sig,
 			attrs: e.startAttrs(req.WorkflowType, req.TaskList, req.Input, req.ExecutionStartToCloseTimeoutSeconds,
 				req.TaskStartToCloseTimeoutSeconds, req.Identity, req.RequestID, req.RetryPolicy, req.CronSchedule,
-				req.Memo, req.SearchAttributes, req.Header, req.DelayStartSeconds),
+				req.Memo, req.SearchAttributes, req.Header, startTiming{
+					delay: req.DelayStartSeconds, jitter: req.JitterStartSeconds, firstRunAt: req.FirstRunAtTimestamp, overlap: req.CronOverlapPolicy,
+				}),
 		})
 		var already *api.WorkflowExecutionAlreadyStartedError
 		if errors.As(err, &already) {

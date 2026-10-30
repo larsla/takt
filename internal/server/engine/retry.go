@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"crypto/rand"
 	"math"
+	"math/big"
 	"slices"
 	"time"
 
@@ -70,6 +72,50 @@ func cronBackoff(spec string, now time.Time) int32 {
 	}
 	next := sched.Next(now.UTC())
 	return int32(math.Ceil(next.Sub(now.UTC()).Seconds()))
+}
+
+// maxCronSkips bounds the fire times nextCronBackoff steps over before it
+// gives up and counts from now.
+const maxCronSkips = 100000
+
+// nextCronBackoff returns the seconds from now until the run that follows a
+// cron run scheduled at scheduled. Fire times count from the scheduled
+// time, not from when the run closed, so "@every 5s" fires every 5 seconds
+// however long each run takes. A fire time that passed while the run was
+// open is skipped, or with CronOverlapPolicyBufferone starts the next run
+// right away.
+func nextCronBackoff(spec string, policy api.CronOverlapPolicy, scheduled, now time.Time) int32 {
+	sched, err := cronParser.Parse(spec)
+	if err != nil {
+		return 0
+	}
+	now = now.UTC()
+	next := sched.Next(scheduled.UTC())
+	if next.After(now) {
+		return int32(math.Ceil(next.Sub(now).Seconds()))
+	}
+	if policy == api.CronOverlapPolicyBufferone {
+		return 0
+	}
+	for range maxCronSkips {
+		next = sched.Next(next)
+		if next.After(now) {
+			return int32(math.Ceil(next.Sub(now).Seconds()))
+		}
+	}
+	return cronBackoff(spec, now)
+}
+
+// jitter returns a random number of seconds below max.
+func jitter(max int32) int32 {
+	if max <= 0 {
+		return 0
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0
+	}
+	return int32(n.Int64())
 }
 
 // clampInt64 converts a JetStream counter to int64 without overflowing.

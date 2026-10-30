@@ -54,7 +54,7 @@ func (e *Engine) startChild(ctx context.Context, parent *State, initiatedID int6
 	}
 	a := ci.Attrs
 	attrs := e.startAttrs(a.WorkflowType, a.TaskList, a.Input, a.ExecutionStartToCloseTimeoutSeconds,
-		a.TaskStartToCloseTimeoutSeconds, "", "", a.RetryPolicy, a.CronSchedule, a.Memo, a.SearchAttributes, a.Header, 0)
+		a.TaskStartToCloseTimeoutSeconds, "", "", a.RetryPolicy, a.CronSchedule, a.Memo, a.SearchAttributes, a.Header, startTiming{})
 	attrs.ParentWorkflowDomain = parent.Domain
 	attrs.ParentWorkflowExecution = parent.Execution()
 	attrs.ParentInitiatedEventID = initiatedID
@@ -290,6 +290,8 @@ func (e *Engine) startContinuation(ctx context.Context, s *State) error {
 		FirstExecutionRunID:                 prev.FirstExecutionRunID,
 		RetryPolicy:                         c.RetryPolicy,
 		CronSchedule:                        c.CronSchedule,
+		CronOverlapPolicy:                   c.CronOverlapPolicy,
+		JitterStartSeconds:                  c.JitterStartSeconds,
 		FirstDecisionTaskBackoffSeconds:     c.BackoffStartIntervalInSeconds,
 		Memo:                                c.Memo,
 		SearchAttributes:                    c.SearchAttributes,

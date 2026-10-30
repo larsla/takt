@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -530,7 +531,7 @@ func (t *tx) completeWorkflow(result []byte, completedID int64) {
 	if cron := t.s.Start.CronSchedule; cron != "" {
 		t.continueAsNew(&api.ContinueAsNewWorkflowExecutionDecisionAttributes{
 			Initiator:                     api.ContinueAsNewInitiatorCronSchedule,
-			BackoffStartIntervalInSeconds: cronBackoff(cron, t.e.now()),
+			BackoffStartIntervalInSeconds: t.cronBackoff(),
 			LastCompletionResult:          result,
 			CronSchedule:                  cron,
 		}, completedID)
@@ -578,7 +579,7 @@ func (t *tx) retryOrCron(reason string, details []byte, completedID int64) bool 
 	if cron := start.CronSchedule; cron != "" {
 		t.continueAsNew(&api.ContinueAsNewWorkflowExecutionDecisionAttributes{
 			Initiator:                     api.ContinueAsNewInitiatorCronSchedule,
-			BackoffStartIntervalInSeconds: cronBackoff(cron, t.e.now()),
+			BackoffStartIntervalInSeconds: t.cronBackoff(),
 			FailureReason:                 reason,
 			FailureDetails:                details,
 			LastCompletionResult:          start.LastCompletionResult,
@@ -587,6 +588,14 @@ func (t *tx) retryOrCron(reason string, details []byte, completedID int64) bool 
 		return true
 	}
 	return false
+}
+
+// cronBackoff returns the seconds until the next run of a cron workflow,
+// counted from the scheduled time of this run, plus the start jitter.
+func (t *tx) cronBackoff() int32 {
+	start := t.s.Start
+	scheduled := time.Unix(0, t.s.ExecutionTime)
+	return nextCronBackoff(start.CronSchedule, start.CronOverlapPolicy, scheduled, t.e.now()) + jitter(start.JitterStartSeconds)
 }
 
 // continueAsNew closes the run and records what the next run starts with.
@@ -623,6 +632,12 @@ func (t *tx) continueAsNew(a *api.ContinueAsNewWorkflowExecutionDecisionAttribut
 	}
 	if a.CronSchedule == "" && a.Initiator != api.ContinueAsNewInitiatorDecider {
 		a.CronSchedule = start.CronSchedule
+	}
+	if a.CronSchedule != "" && a.CronOverlapPolicy == "" {
+		a.CronOverlapPolicy = start.CronOverlapPolicy
+	}
+	if a.CronSchedule != "" && a.JitterStartSeconds == 0 {
+		a.JitterStartSeconds = start.JitterStartSeconds
 	}
 	newRunID := uuid.NewString()
 	ev := t.event(api.EventTypeWorkflowExecutionContinuedAsNew)

@@ -34,6 +34,7 @@ type (
 	ContinueAsNewWorkflowExecutionDecisionAttributes               = api.ContinueAsNewWorkflowExecutionDecisionAttributes
 	CountWorkflowExecutionsRequest                                 = api.CountWorkflowExecutionsRequest
 	CountWorkflowExecutionsResponse                                = api.CountWorkflowExecutionsResponse
+	CronOverlapPolicy                                              = api.CronOverlapPolicy
 	Decision                                                       = api.Decision
 	DecisionTaskCompletedEventAttributes                           = api.DecisionTaskCompletedEventAttributes
 	DecisionTaskFailedCause                                        = api.DecisionTaskFailedCause
@@ -189,6 +190,8 @@ const (
 	ContinueAsNewInitiatorCronSchedule                         = api.ContinueAsNewInitiatorCronSchedule
 	ContinueAsNewInitiatorDecider                              = api.ContinueAsNewInitiatorDecider
 	ContinueAsNewInitiatorRetryPolicy                          = api.ContinueAsNewInitiatorRetryPolicy
+	CronOverlapPolicyBufferone                                 = api.CronOverlapPolicyBufferone
+	CronOverlapPolicySkipped                                   = api.CronOverlapPolicySkipped
 	DecisionTaskFailedCauseBadBinary                           = api.DecisionTaskFailedCauseBadBinary
 	DecisionTaskFailedCauseBadCancelTimerAttributes            = api.DecisionTaskFailedCauseBadCancelTimerAttributes
 	DecisionTaskFailedCauseBadCancelWorkflowAttributes         = api.DecisionTaskFailedCauseBadCancelWorkflowAttributes

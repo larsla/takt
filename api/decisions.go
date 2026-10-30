@@ -91,6 +91,8 @@ type ContinueAsNewWorkflowExecutionDecisionAttributes struct {
 	Header                              *Header                `json:"header,omitempty"`
 	Memo                                *Memo                  `json:"memo,omitempty"`
 	SearchAttributes                    *SearchAttributes      `json:"searchAttributes,omitempty"`
+	CronOverlapPolicy                   CronOverlapPolicy      `json:"cronOverlapPolicy,omitempty"`
+	JitterStartSeconds                  int32                  `json:"jitterStartSeconds,omitempty"`
 }
 
 type StartChildWorkflowExecutionDecisionAttributes struct {

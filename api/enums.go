@@ -93,6 +93,19 @@ const (
 	TimeoutTypeHeartbeat       TimeoutType = "HEARTBEAT"
 )
 
+// CronOverlapPolicy says what happens to a cron fire time that passes
+// while the previous run is still open.
+type CronOverlapPolicy string
+
+const (
+	// CronOverlapPolicySkipped skips fire times missed while a run was open.
+	// It is the default.
+	CronOverlapPolicySkipped CronOverlapPolicy = "SKIPPED"
+	// CronOverlapPolicyBufferone starts the next run as soon as the
+	// previous one closes if a fire time passed meanwhile.
+	CronOverlapPolicyBufferone CronOverlapPolicy = "BUFFER_ONE"
+)
+
 // FailureCategory classifies an activity failure apart from its reason.
 type FailureCategory string
 

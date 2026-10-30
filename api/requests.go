@@ -76,6 +76,9 @@ type StartWorkflowExecutionRequest struct {
 	SearchAttributes                    *SearchAttributes     `json:"searchAttributes,omitempty"`
 	Header                              *Header               `json:"header,omitempty"`
 	DelayStartSeconds                   int32                 `json:"delayStartSeconds,omitempty"`
+	JitterStartSeconds                  int32                 `json:"jitterStartSeconds,omitempty"`
+	FirstRunAtTimestamp                 int64                 `json:"firstRunAtTimestamp,omitempty"`
+	CronOverlapPolicy                   CronOverlapPolicy     `json:"cronOverlapPolicy,omitempty"`
 }
 
 type StartWorkflowExecutionResponse struct {
@@ -112,6 +115,9 @@ type SignalWithStartWorkflowExecutionRequest struct {
 	SearchAttributes                    *SearchAttributes     `json:"searchAttributes,omitempty"`
 	Header                              *Header               `json:"header,omitempty"`
 	DelayStartSeconds                   int32                 `json:"delayStartSeconds,omitempty"`
+	JitterStartSeconds                  int32                 `json:"jitterStartSeconds,omitempty"`
+	FirstRunAtTimestamp                 int64                 `json:"firstRunAtTimestamp,omitempty"`
+	CronOverlapPolicy                   CronOverlapPolicy     `json:"cronOverlapPolicy,omitempty"`
 }
 
 type RequestCancelWorkflowExecutionRequest struct {

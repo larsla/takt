@@ -33,6 +33,19 @@ type StartWorkflowOptions struct {
 	Memo                            map[string]interface{}
 	SearchAttributes                map[string]interface{}
 	DelayStart                      time.Duration
+	// JitterStart adds a random delay below it to the start of the first
+	// run and of each cron run.
+	JitterStart time.Duration
+	// FirstRunAt starts the first run at this time, in place of DelayStart
+	// and JitterStart.
+	FirstRunAt time.Time
+	// CronOverlapPolicy says what happens to cron fire times that pass
+	// while a run is open: CronOverlapPolicySkipped (the default) or
+	// CronOverlapPolicyBufferone.
+	CronOverlapPolicy api.CronOverlapPolicy
+	// RequestID makes starts with the same ID idempotent. It defaults to a
+	// random UUID.
+	RequestID string
 }
 
 // WorkflowRun is a started workflow.
@@ -129,6 +142,9 @@ func (c *workflowClient) startRequest(options StartWorkflowOptions, workflow int
 	if options.DelayStart < 0 {
 		return nil, errors.New("negative DelayStart provided")
 	}
+	if options.JitterStart < 0 {
+		return nil, errors.New("negative JitterStart provided")
+	}
 	if err := options.RetryPolicy.validate(); err != nil {
 		return nil, err
 	}
@@ -169,11 +185,19 @@ func (c *workflowClient) startRequest(options StartWorkflowOptions, workflow int
 		ExecutionStartToCloseTimeoutSeconds: durationSeconds(options.ExecutionStartToCloseTimeout),
 		TaskStartToCloseTimeoutSeconds:      durationSeconds(taskTimeout),
 		Identity:                            c.identity,
-		RequestID:                           uuid.NewString(),
+		RequestID:                           options.RequestID,
 		WorkflowIDReusePolicy:               options.WorkflowIDReusePolicy.toAPI(),
 		RetryPolicy:                         options.RetryPolicy.toAPI(),
 		CronSchedule:                        options.CronSchedule,
 		DelayStartSeconds:                   durationSeconds(options.DelayStart),
+		JitterStartSeconds:                  durationSeconds(options.JitterStart),
+		CronOverlapPolicy:                   options.CronOverlapPolicy,
+	}
+	if req.RequestID == "" {
+		req.RequestID = uuid.NewString()
+	}
+	if !options.FirstRunAt.IsZero() {
+		req.FirstRunAtTimestamp = options.FirstRunAt.UnixNano()
 	}
 	if memo != nil {
 		req.Memo = &api.Memo{Fields: memo}
@@ -335,7 +359,11 @@ func (c *workflowClient) SignalWithStartWorkflow(ctx context.Context, workflowID
 		CronSchedule:                        req.CronSchedule,
 		Memo:                                req.Memo,
 		SearchAttributes:                    req.SearchAttributes,
+		Header:                              req.Header,
 		DelayStartSeconds:                   req.DelayStartSeconds,
+		JitterStartSeconds:                  req.JitterStartSeconds,
+		FirstRunAtTimestamp:                 req.FirstRunAtTimestamp,
+		CronOverlapPolicy:                   req.CronOverlapPolicy,
 	})
 	if err != nil {
 		return nil, err

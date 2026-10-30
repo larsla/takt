@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -196,5 +197,54 @@ func TestRetentionPurge(t *testing.T) {
 	// The ID can be reused once its run is gone.
 	if _, err := e.client.StartWorkflow(e.ctx, e.options("old"), "neverRuns"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func slowCronActivity(ctx context.Context) error {
+	time.Sleep(1500 * time.Millisecond)
+	return nil
+}
+
+func slowCronWorkflow(ctx Context) error {
+	ctx = WithActivityOptions(ctx, ActivityOptions{ScheduleToStartTimeout: time.Minute, StartToCloseTimeout: time.Minute})
+	return ExecuteActivity(ctx, slowCronActivity).Get(ctx, nil)
+}
+
+// TestCronFixedRate checks that "@every 3s" runs every 3 seconds even when
+// each run takes 1.5 seconds, instead of 3 seconds after the previous run
+// closed.
+func TestCronFixedRate(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	e.worker(WorkerOptions{}, func(w *Worker) {
+		w.RegisterWorkflow(slowCronWorkflow)
+		w.RegisterActivity(slowCronActivity)
+	})
+	opts := e.options("cron-rate")
+	opts.CronSchedule = "@every 3s"
+	opts.CronOverlapPolicy = api.CronOverlapPolicySkipped
+	if _, err := e.client.StartWorkflow(e.ctx, opts, slowCronWorkflow); err != nil {
+		t.Fatal(err)
+	}
+	query := "WorkflowID = 'cron-rate' AND CloseStatus = 'CONTINUED_AS_NEW'"
+	deadline := time.Now().Add(30 * time.Second)
+	var runs []*api.WorkflowExecutionInfo
+	for len(runs) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d cron runs finished", len(runs))
+		}
+		time.Sleep(200 * time.Millisecond)
+		list, err := e.client.ListWorkflow(e.ctx, &api.ListWorkflowExecutionsRequest{Query: query + " ORDER BY StartTime ASC"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs = list.Executions
+	}
+	_ = e.client.TerminateWorkflow(e.ctx, "cron-rate", "", "enough", nil)
+	for i := 1; i < 3; i++ {
+		gap := time.Duration(runs[i].ExecutionTime - runs[i-1].ExecutionTime)
+		if gap < 2*time.Second || gap > 4*time.Second {
+			t.Fatalf("run %d started %v after the one before", i, gap)
+		}
 	}
 }

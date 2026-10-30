@@ -118,6 +118,8 @@ type WorkflowExecutionStartedEventAttributes struct {
 	ExpirationTimestamp                 int64                  `json:"expirationTimestamp,omitempty"`
 	CronSchedule                        string                 `json:"cronSchedule,omitempty"`
 	FirstDecisionTaskBackoffSeconds     int32                  `json:"firstDecisionTaskBackoffSeconds,omitempty"`
+	CronOverlapPolicy                   CronOverlapPolicy      `json:"cronOverlapPolicy,omitempty"`
+	JitterStartSeconds                  int32                  `json:"jitterStartSeconds,omitempty"`
 	Memo                                *Memo                  `json:"memo,omitempty"`
 	SearchAttributes                    *SearchAttributes      `json:"searchAttributes,omitempty"`
 	Header                              *Header                `json:"header,omitempty"`
