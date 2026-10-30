@@ -72,6 +72,16 @@ type (
 	// GetVersionOption changes the version the first GetVersion call for a
 	// change ID returns.
 	GetVersionOption = sdk.GetVersionOption
+	// WaitGroup waits for workflow goroutines to finish.
+	WaitGroup = sdk.WaitGroup
+	// BatchFuture runs futures with limited concurrency and collects them.
+	BatchFuture = sdk.BatchFuture
+	// RegistryInfo describes a registered workflow.
+	RegistryInfo = sdk.RegistryWorkflowInfo
+	// ExecutionAsync is the result of client.StartWorkflowAsync.
+	ExecutionAsync = sdk.WorkflowExecutionAsync
+	// Bugports is accepted for compatibility with Cadence and not used.
+	Bugports = sdk.Bugports
 	// ParentClosePolicy says what happens to a child when its parent closes.
 	ParentClosePolicy = sdk.ParentClosePolicy
 	// WorkflowIDReusePolicy says when a workflow ID may be reused.
@@ -108,6 +118,45 @@ func GetSpanContext(ctx Context) opentracing.SpanContext { return sdk.GetSpanCon
 func WithSpanContext(ctx Context, spanContext opentracing.SpanContext) Context {
 	return sdk.WithSpanContext(ctx, spanContext)
 }
+
+// NewWaitGroup creates a WaitGroup.
+func NewWaitGroup(ctx Context) WaitGroup { return sdk.NewWaitGroup(ctx) }
+
+// NewBatchFuture calls the factories, at most batchSize at a time, and
+// returns a future for all their results.
+func NewBatchFuture(ctx Context, batchSize int, factories []func(ctx Context) Future) (BatchFuture, error) {
+	return sdk.NewBatchFuture(ctx, batchSize, factories)
+}
+
+// GetActivityOptions returns the activity options set on ctx.
+func GetActivityOptions(ctx Context) *ActivityOptions { return sdk.GetActivityOptions(ctx) }
+
+// GetActivityTaskList returns the task list activities started with ctx go to.
+func GetActivityTaskList(ctx Context) string { return sdk.GetActivityTaskList(ctx) }
+
+// GetWorkflowTaskList returns the task list child workflows started with ctx
+// go to.
+func GetWorkflowTaskList(ctx Context) string { return sdk.GetWorkflowTaskList(ctx) }
+
+// WithCronSchedule sets the cron schedule of child workflows started with
+// ctx, and of the run a ContinueAsNewError built with ctx starts.
+func WithCronSchedule(ctx Context, cronSchedule string) Context {
+	return sdk.WithCronSchedule(ctx, cronSchedule)
+}
+
+// GetHistoryCount returns the number of events in the workflow's history.
+func GetHistoryCount(ctx Context) int64 { return sdk.GetHistoryCount(ctx) }
+
+// GetTotalHistoryBytes estimates the encoded size of the workflow's history.
+func GetTotalHistoryBytes(ctx Context) int64 { return sdk.GetTotalHistoryBytes(ctx) }
+
+// GetUnhandledSignalNames returns the names of signals that arrived and that
+// the workflow hasn't received yet.
+func GetUnhandledSignalNames(ctx Context) []string { return sdk.GetUnhandledSignalNames(ctx) }
+
+// GetRegisteredWorkflowTypes returns the workflow types registered with
+// Register, sorted.
+func GetRegisteredWorkflowTypes() []string { return sdk.GetRegisteredWorkflowTypes() }
 
 // NewTimeoutError creates a TimeoutError, for unit tests of workflows.
 func NewTimeoutError(timeoutType api.TimeoutType, details ...interface{}) *TimeoutError {

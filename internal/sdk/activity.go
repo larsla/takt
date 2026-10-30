@@ -17,6 +17,8 @@ import (
 // ActivityType names an activity.
 type ActivityType struct {
 	Name string
+	// Path is accepted for compatibility with Cadence and not used.
+	Path string
 }
 
 // ActivityInfo describes the running activity.
@@ -63,6 +65,12 @@ type activityEnv struct {
 
 // GetActivityInfo returns information about the running activity.
 func GetActivityInfo(ctx context.Context) ActivityInfo { return getActivityEnv(ctx).info }
+
+// HasActivityInfo reports whether ctx is an activity's context.
+func HasActivityInfo(ctx context.Context) bool {
+	_, ok := ctx.Value(activityEnvKey).(*activityEnv)
+	return ok
+}
 
 // GetActivityLogger returns the activity's logger.
 func GetActivityLogger(ctx context.Context) *zap.Logger { return getActivityEnv(ctx).logger }

@@ -115,6 +115,14 @@ type ChildWorkflowOptions struct {
 	Memo                         map[string]interface{}
 	SearchAttributes             map[string]interface{}
 	ParentClosePolicy            ParentClosePolicy
+	// Bugports is accepted for compatibility with Cadence and not used.
+	Bugports Bugports
+}
+
+// Bugports turns on old Cadence client behavior. takt accepts it and
+// ignores it.
+type Bugports struct {
+	StartChildWorkflowsOnCanceledContext bool
 }
 
 // WorkflowIDReusePolicy says when a workflow ID may be reused.

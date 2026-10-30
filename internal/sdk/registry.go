@@ -17,6 +17,8 @@ type RegisterWorkflowOptions struct {
 	// qualified function name.
 	Name                          string
 	DisableAlreadyRegisteredCheck bool
+	// EnableShortName registers the workflow under its bare function name.
+	EnableShortName bool
 }
 
 // RegisterActivityOptions configures activity registration.
@@ -117,7 +119,11 @@ func (r *registry) RegisterWorkflowWithOptions(fn interface{}, opts RegisterWork
 	}
 	fnName := getFunctionName(fn)
 	name := opts.Name
-	if name == "" {
+	switch {
+	case name != "":
+	case opts.EnableShortName:
+		name = fnName[strings.LastIndex(fnName, ".")+1:]
+	default:
 		name = fnName
 	}
 	r.mu.Lock()

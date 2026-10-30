@@ -195,6 +195,8 @@ type ContinueAsNewError struct {
 type continueAsNewParams struct {
 	workflowType string
 	input        []byte
+	args         []interface{}
+	cronSchedule string
 	taskList     string
 	execTimeout  int32
 	taskTimeout  int32
@@ -202,6 +204,26 @@ type continueAsNewParams struct {
 }
 
 func (e *ContinueAsNewError) Error() string { return "ContinueAsNew" }
+
+// WorkflowType returns the workflow type of the new run.
+func (e *ContinueAsNewError) WorkflowType() *WorkflowType {
+	return &WorkflowType{Name: e.params.workflowType}
+}
+
+// Args returns the arguments of the new run.
+func (e *ContinueAsNewError) Args() []interface{} { return e.params.args }
+
+// Input returns the encoded arguments of the new run.
+func (e *ContinueAsNewError) Input() []byte { return e.params.input }
+
+// Header returns the header of the new run.
+func (e *ContinueAsNewError) Header() *api.Header { return e.params.header }
+
+// WorkflowIDReusePolicy returns the reuse policy of the new run, which
+// takt doesn't change on continue-as-new.
+func (e *ContinueAsNewError) WorkflowIDReusePolicy() WorkflowIDReusePolicy {
+	return WorkflowIDReusePolicyAllowDuplicateFailedOnly
+}
 
 // IsCanceledError reports whether err is a CanceledError.
 func IsCanceledError(err error) bool {

@@ -18,6 +18,8 @@ type (
 	Type = sdk.ActivityType
 	// RegisterOptions configures activity registration.
 	RegisterOptions = sdk.RegisterActivityOptions
+	// RegistryInfo describes a registered activity.
+	RegistryInfo = sdk.RegistryActivityInfo
 )
 
 // ErrResultPending, returned from an activity, means it will be completed
@@ -34,6 +36,9 @@ func RegisterWithOptions(activityFunc interface{}, opts RegisterOptions) {
 
 // GetInfo returns information about the running activity.
 func GetInfo(ctx context.Context) Info { return sdk.GetActivityInfo(ctx) }
+
+// HasInfo reports whether ctx is an activity's context.
+func HasInfo(ctx context.Context) bool { return sdk.HasActivityInfo(ctx) }
 
 // GetLogger returns the activity's logger.
 func GetLogger(ctx context.Context) *zap.Logger { return sdk.GetActivityLogger(ctx) }

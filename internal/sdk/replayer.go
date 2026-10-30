@@ -340,6 +340,7 @@ func (r *replayer) resume(ctx context.Context, events []*api.HistoryEvent, sent 
 	if err := matchReplay(sent, first.decisionEvents); err != nil {
 		return nil, errCacheMismatch
 	}
+	r.countEvents(first.decisionEvents)
 	r.applyDecisionEvents(first.decisionEvents)
 	return r.processBatches(ctx, batches[1:], modeTask)
 }
@@ -351,9 +352,12 @@ func (r *replayer) processBatches(ctx context.Context, batches []*batch, mode re
 			break
 		}
 		r.replay = !live
+		r.countEvents(b.inputs)
 		if b.started != nil {
+			r.countEvents([]*api.HistoryEvent{b.started})
 			r.now = time.Unix(0, b.started.Timestamp)
 			r.info.DecisionStartedEventID = b.started.EventID
+			r.info.HistoryCount = b.started.EventID
 		}
 		for _, e := range b.inputs {
 			if err := r.processEvent(e); err != nil {
@@ -385,9 +389,21 @@ func (r *replayer) processBatches(ctx context.Context, batches []*batch, mode re
 			}
 			return nil, err
 		}
+		r.countEvents(b.decisionEvents)
 		r.applyDecisionEvents(b.decisionEvents)
 	}
 	return nil, nil
+}
+
+// countEvents adds the encoded size of events to TotalHistoryBytes. Each
+// event is counted once, as the replayer first sees it.
+func (r *replayer) countEvents(events []*api.HistoryEvent) {
+	for _, e := range events {
+		if data, err := json.Marshal(e); err == nil {
+			r.info.TotalHistoryBytes += int64(len(data))
+		}
+	}
+	r.info.HistoryBytesServer = r.info.TotalHistoryBytes
 }
 
 // execute runs workflow code until it blocks, feeding it local activity
@@ -522,6 +538,7 @@ func (r *replayer) addCloseDecision() {
 				ExecutionStartToCloseTimeoutSeconds: p.execTimeout,
 				TaskStartToCloseTimeoutSeconds:      p.taskTimeout,
 				Header:                              p.header,
+				CronSchedule:                        p.cronSchedule,
 			},
 		})
 	case errors.As(err, &canceled):

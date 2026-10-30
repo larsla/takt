@@ -23,6 +23,8 @@ type WorkflowExecution struct {
 // WorkflowType names a workflow.
 type WorkflowType struct {
 	Name string
+	// Path is accepted for compatibility with Cadence and not used.
+	Path string
 }
 
 // WorkflowInfo describes the running workflow.
@@ -45,7 +47,26 @@ type WorkflowInfo struct {
 	BinaryChecksum                      *string
 	DecisionStartedEventID              int64
 	RetryPolicy                         *api.RetryPolicy
+	// HistoryCount is the number of events in the history when the
+	// current decision task started; TotalHistoryBytes estimates their
+	// encoded size. Long-running workflows use them to decide when to
+	// continue as new.
+	HistoryCount       int64
+	TotalHistoryBytes  int64
+	HistoryBytesServer int64
 }
+
+// GetBinaryChecksum returns the binary checksum of the worker, if set.
+func (i *WorkflowInfo) GetBinaryChecksum() string {
+	if i.BinaryChecksum == nil {
+		return ""
+	}
+	return *i.BinaryChecksum
+}
+
+// GetDecisionStartedEventID returns the started event of the current
+// decision task.
+func (i *WorkflowInfo) GetDecisionStartedEventID() int64 { return i.DecisionStartedEventID }
 
 // Version is a workflow code version used with GetVersion.
 type Version int
@@ -846,6 +867,8 @@ func NewContinueAsNewError(ctx Context, wfn interface{}, args ...interface{}) *C
 	info := env.WorkflowInfo()
 	o := childOptions(ctx)
 	p := &continueAsNewParams{
+		args:         args,
+		cronSchedule: o.CronSchedule,
 		header:       header,
 		workflowType: env.Registry().workflowName(wfn),
 		input:        input,

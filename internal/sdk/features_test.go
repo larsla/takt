@@ -700,3 +700,113 @@ func TestActivityFailureOptions(t *testing.T) {
 		t.Fatalf("detail %q", detail)
 	}
 }
+
+func helpersWorkflow(ctx Context) (map[string]interface{}, error) {
+	out := map[string]interface{}{}
+	actx := WithActivityOptions(ctx, ActivityOptions{ScheduleToStartTimeout: time.Minute, StartToCloseTimeout: time.Minute, TaskList: "other"})
+	out["activityTaskList"] = GetActivityTaskList(actx)
+	out["workflowTaskList"] = GetWorkflowTaskList(ctx)
+	out["s2s"] = GetActivityOptions(actx).ScheduleToStartTimeout.String()
+	actx = WithTaskList(actx, GetInfo(ctx).TaskListName)
+
+	wg := NewWaitGroup(ctx)
+	sum := 0
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+		Go(ctx, func(ctx Context) {
+			defer wg.Done()
+			_ = Sleep(ctx, time.Duration(i)*time.Millisecond)
+			sum += i
+		})
+	}
+	wg.Wait(ctx)
+	out["sum"] = sum
+
+	var factories []func(ctx Context) Future
+	for i := range 5 {
+		factories = append(factories, func(ctx Context) Future { return ExecuteActivity(actx, greet, fmt.Sprint(i)) })
+	}
+	bf, err := NewBatchFuture(ctx, 2, factories)
+	if err != nil {
+		return nil, err
+	}
+	var greetings []string
+	if err := bf.Get(ctx, &greetings); err != nil {
+		return nil, err
+	}
+	out["greetings"] = strings.Join(greetings, "|")
+	out["futures"] = len(bf.GetFutures())
+	out["ready"] = bf.IsReady()
+
+	// A signal that arrived but nobody received yet.
+	_ = Await(ctx, func() bool { return len(GetUnhandledSignalNames(ctx)) > 0 })
+	out["unhandled"] = strings.Join(GetUnhandledSignalNames(ctx), ",")
+	out["historyCount"] = GetHistoryCount(ctx) > 5
+	out["historyBytes"] = GetTotalHistoryBytes(ctx) > 100
+	return out, nil
+}
+
+func TestWorkflowHelpers(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	e.worker(WorkerOptions{}, func(w *Worker) {
+		w.RegisterWorkflow(helpersWorkflow)
+		w.RegisterActivity(greet)
+	})
+	run := e.run("helpers", helpersWorkflow)
+	if err := e.client.SignalWorkflow(e.ctx, run.GetID(), "", "pending", "x"); err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]interface{}
+	if err := run.Get(e.ctx, &out); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]interface{}{
+		"activityTaskList": "other", "workflowTaskList": testTaskList, "s2s": "1m0s", "sum": float64(6),
+		"greetings": "Hello 0!|Hello 1!|Hello 2!|Hello 3!|Hello 4!", "futures": float64(5), "ready": true,
+		"unhandled": "pending", "historyCount": true, "historyBytes": true,
+	}
+	for k, v := range want {
+		if out[k] != v {
+			t.Errorf("%s = %v, want %v", k, out[k], v)
+		}
+	}
+}
+
+func TestRegistryInfo(t *testing.T) {
+	r := newRegistry(nil)
+	r.RegisterWorkflowWithOptions(helpersWorkflow, RegisterWorkflowOptions{EnableShortName: true})
+	r.RegisterActivityWithOptions(greet, RegisterActivityOptions{Name: "greet"})
+	ws, as := r.GetRegisteredWorkflows(), r.GetRegisteredActivities()
+	if len(ws) != 1 || ws[0].WorkflowType().Name != "helpersWorkflow" || ws[0].GetFunction() == nil {
+		t.Fatalf("workflows %v", ws)
+	}
+	if len(as) != 1 || as[0].ActivityType().Name != "greet" || as[0].GetFunction() == nil {
+		t.Fatalf("activities %v", as)
+	}
+	if HasActivityInfo(context.Background()) {
+		t.Fatal("background context is not an activity context")
+	}
+}
+
+func continuingWorkflow(ctx Context, n int) error {
+	return NewContinueAsNewError(WithCronSchedule(ctx, "@every 1m"), continuingWorkflow, n+1)
+}
+
+func TestContinueAsNewErrorAccessors(t *testing.T) {
+	var s WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(continuingWorkflow)
+	env.ExecuteWorkflow(continuingWorkflow, 1)
+	var can *ContinueAsNewError
+	if !errors.As(env.GetWorkflowError(), &can) {
+		t.Fatalf("error %v", env.GetWorkflowError())
+	}
+	if !strings.HasSuffix(can.WorkflowType().Name, "continuingWorkflow") || len(can.Args()) != 1 || can.Args()[0] != 2 ||
+		string(can.Input()) != "2\n" || can.params.cronSchedule != "@every 1m" || can.Header() != nil {
+		t.Fatalf("continue-as-new %+v", can.params)
+	}
+	if can.WorkflowIDReusePolicy() != WorkflowIDReusePolicyAllowDuplicateFailedOnly {
+		t.Fatal("reuse policy")
+	}
+}
