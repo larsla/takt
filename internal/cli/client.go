@@ -211,7 +211,7 @@ func runWorkflow(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	c.stringVar(&cron, "", "cron schedule", "cron")
 	c.stringVar(&query, "", "visibility query for list, query type for query", "query", "q")
 	c.stringVar(&name, "", "signal name or query type", "name", "n", "query_type", "qt")
-	c.stringVar(&reason, "", "termination reason", "reason", "re")
+	c.stringVar(&reason, "", "cancel or termination reason", "reason", "re")
 	c.intVar(&execTimeout, 0, "execution timeout in seconds", "execution_timeout", "et")
 	c.intVar(&taskTimeout, 10, "decision task timeout in seconds", "decision_timeout", "dt")
 	c.intVar(&pageSize, 100, "maximum workflows to list", "pagesize", "ps")
@@ -386,7 +386,7 @@ func runWorkflow(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			return err
 		}
 		if err := svc.RequestCancelWorkflowExecution(ctx, &api.RequestCancelWorkflowExecutionRequest{
-			Domain: c.domain, WorkflowExecution: exec, Identity: "takt-cli", RequestID: uuid.NewString(),
+			Domain: c.domain, WorkflowExecution: exec, Identity: "takt-cli", RequestID: uuid.NewString(), Cause: reason,
 		}); err != nil {
 			return err
 		}

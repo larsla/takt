@@ -332,7 +332,7 @@ func TestCancellation(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if err := e.client.CancelWorkflow(e.ctx, run.GetID(), ""); err != nil {
+	if err := e.client.CancelWorkflow(e.ctx, run.GetID(), "", WithCancelReason("canceled by test")); err != nil {
 		t.Fatal(err)
 	}
 	err := run.Get(e.ctx, nil)
@@ -342,6 +342,16 @@ func TestCancellation(t *testing.T) {
 	events := historyTypes(t, e, run)
 	if !containsType(events, api.EventTypeActivityTaskCanceled) || !containsType(events, api.EventTypeWorkflowExecutionCanceled) {
 		t.Fatalf("history %v", events)
+	}
+	it := e.client.GetWorkflowHistory(e.ctx, run.GetID(), run.GetRunID(), false, api.HistoryEventFilterTypeAllEvent)
+	for it.HasNext() {
+		ev, err := it.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a := ev.WorkflowExecutionCancelRequestedEventAttributes; a != nil && a.Cause != "canceled by test" {
+			t.Fatalf("cancel cause %q", a.Cause)
+		}
 	}
 }
 

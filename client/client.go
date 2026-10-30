@@ -28,6 +28,9 @@ type (
 	WorkflowIDReusePolicy = sdk.WorkflowIDReusePolicy
 	// ParentClosePolicy says what happens to a child when its parent closes.
 	ParentClosePolicy = sdk.ParentClosePolicy
+	// CancelOption values are functional options for CancelWorkflow:
+	// WithCancelReason.
+	CancelOption = sdk.Option
 )
 
 const (
@@ -43,6 +46,10 @@ const (
 	// QueryTypeStackTrace returns the stacks of a workflow's goroutines.
 	QueryTypeStackTrace = sdk.QueryTypeStackTrace
 )
+
+// WithCancelReason sets the reason CancelWorkflow records in the
+// workflow's history.
+func WithCancelReason(reason string) CancelOption { return sdk.WithCancelReason(reason) }
 
 // NewClient creates a client for a domain. Build service with
 // takt.NewServiceClient.

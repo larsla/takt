@@ -73,7 +73,7 @@ type Client interface {
 	SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error
 	SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, signalArg interface{},
 		options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecution, error)
-	CancelWorkflow(ctx context.Context, workflowID, runID string) error
+	CancelWorkflow(ctx context.Context, workflowID, runID string, opts ...Option) error
 	TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details []byte) error
 	GetWorkflowHistory(ctx context.Context, workflowID, runID string, isLongPoll bool, filterType api.HistoryEventFilterType) HistoryEventIterator
 	CompleteActivity(ctx context.Context, taskToken []byte, result interface{}, err error) error
@@ -343,14 +343,33 @@ func (c *workflowClient) SignalWithStartWorkflow(ctx context.Context, workflowID
 	return &WorkflowExecution{ID: workflowID, RunID: resp.RunID}, nil
 }
 
+// Option is a functional option of a Client method, such as
+// WithCancelReason for CancelWorkflow.
+type Option interface{ private() }
+
+// CancelReason is the Option WithCancelReason returns.
+type CancelReason string
+
+func (CancelReason) private() {}
+
+// WithCancelReason sets the reason CancelWorkflow records in the
+// workflow's cancel-requested event.
+func WithCancelReason(reason string) Option { return CancelReason(reason) }
+
 // CancelWorkflow requests cancellation of a workflow.
-func (c *workflowClient) CancelWorkflow(ctx context.Context, workflowID, runID string) error {
-	return c.service.RequestCancelWorkflowExecution(ctx, &api.RequestCancelWorkflowExecutionRequest{
+func (c *workflowClient) CancelWorkflow(ctx context.Context, workflowID, runID string, opts ...Option) error {
+	req := &api.RequestCancelWorkflowExecutionRequest{
 		Domain:            c.domain,
 		WorkflowExecution: &api.WorkflowExecution{WorkflowID: workflowID, RunID: runID},
 		Identity:          c.identity,
 		RequestID:         uuid.NewString(),
-	})
+	}
+	for _, o := range opts {
+		if r, ok := o.(CancelReason); ok {
+			req.Cause = string(r)
+		}
+	}
+	return c.service.RequestCancelWorkflowExecution(ctx, req)
 }
 
 // TerminateWorkflow terminates a workflow right away.
