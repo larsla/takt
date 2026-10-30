@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/opentracing/opentracing-go"
 	"go.uber.org/zap"
 
 	"github.com/larsla/takt/api"
@@ -17,12 +19,26 @@ import (
 // catch nondeterministic changes before they are deployed.
 type WorkflowReplayer struct {
 	*registry
+	opts ReplayOptions
+}
+
+// ReplayOptions configures a WorkflowReplayer with the worker options that
+// change how workflow code runs.
+type ReplayOptions struct {
+	DataConverter                     DataConverter
+	WorkflowInterceptorChainFactories []WorkflowInterceptorFactory
+	ContextPropagators                []ContextPropagator
+	Tracer                            opentracing.Tracer
+	FeatureFlags                      FeatureFlags
 }
 
 // NewWorkflowReplayer creates a replayer with its own registry, backed by
 // the global one.
-func NewWorkflowReplayer() *WorkflowReplayer {
-	return &WorkflowReplayer{registry: newRegistry(globalRegistry)}
+func NewWorkflowReplayer() *WorkflowReplayer { return NewWorkflowReplayerWithOptions(ReplayOptions{}) }
+
+// NewWorkflowReplayerWithOptions creates a replayer with options.
+func NewWorkflowReplayerWithOptions(options ReplayOptions) *WorkflowReplayer {
+	return &WorkflowReplayer{registry: newRegistry(globalRegistry), opts: options}
 }
 
 // ReplayWorkflowHistory replays a history and returns an error if the
@@ -40,10 +56,14 @@ func (r *WorkflowReplayer) ReplayWorkflowHistory(logger *zap.Logger, history *ap
 		runID = a.FirstExecutionRunID
 	}
 	rep := newReplayer(replayerConfig{
-		domain:    "ReplayDomain",
-		execution: WorkflowExecution{ID: "ReplayId", RunID: runID},
-		registry:  r.registry,
-		logger:    logger,
+		domain:        "ReplayDomain",
+		execution:     WorkflowExecution{ID: "ReplayId", RunID: runID},
+		registry:      r.registry,
+		logger:        logger,
+		dataConverter: r.opts.DataConverter,
+		propagators:   withTracing(r.opts.ContextPropagators, r.opts.Tracer),
+		tracer:        r.opts.Tracer,
+		interceptors:  r.opts.WorkflowInterceptorChainFactories,
 	})
 	defer rep.close()
 	_, err := rep.replayHistory(context.Background(), history.Events, modeReplay)
@@ -60,11 +80,69 @@ func (r *WorkflowReplayer) ReplayWorkflowHistoryFromJSONFile(logger *zap.Logger,
 	return r.ReplayWorkflowHistory(logger, h)
 }
 
+// ReplayWorkflowHistoryFromJSON replays a history read as JSON from reader.
+func (r *WorkflowReplayer) ReplayWorkflowHistoryFromJSON(logger *zap.Logger, reader io.Reader) error {
+	return r.ReplayPartialWorkflowHistoryFromJSON(logger, reader, 0)
+}
+
+// ReplayPartialWorkflowHistoryFromJSON replays the events of a JSON
+// history up to and including lastEventID, or all of them when it is 0.
+func (r *WorkflowReplayer) ReplayPartialWorkflowHistoryFromJSON(logger *zap.Logger, reader io.Reader, lastEventID int64) error {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
+	h, err := parseHistory(data, "input")
+	if err != nil {
+		return err
+	}
+	return r.ReplayWorkflowHistory(logger, truncateHistory(h, lastEventID))
+}
+
+// ReplayPartialWorkflowHistoryFromJSONFile is
+// ReplayPartialWorkflowHistoryFromJSON reading a file.
+func (r *WorkflowReplayer) ReplayPartialWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string, lastEventID int64) error {
+	h, err := historyFromFile(jsonfileName)
+	if err != nil {
+		return err
+	}
+	return r.ReplayWorkflowHistory(logger, truncateHistory(h, lastEventID))
+}
+
+// truncateHistory keeps the events up to lastEventID. When that cuts off
+// part of what a decision task produced, it also drops that decision
+// task's completion, so the replay runs the task without comparing its
+// decisions.
+func truncateHistory(h *api.History, lastEventID int64) *api.History {
+	if lastEventID <= 0 {
+		return h
+	}
+	n := 0
+	for n < len(h.Events) && h.Events[n].EventID <= lastEventID {
+		n++
+	}
+	events := h.Events[:n]
+	if n < len(h.Events) && isDecisionEvent(h.Events[n].EventType) {
+		k := len(events) - 1
+		for k >= 0 && isDecisionEvent(events[k].EventType) {
+			k--
+		}
+		if k >= 0 && events[k].EventType == api.EventTypeDecisionTaskCompleted {
+			events = events[:k]
+		}
+	}
+	return &api.History{Events: events}
+}
+
 func historyFromFile(name string) (*api.History, error) {
 	data, err := os.ReadFile(filepath.Clean(name))
 	if err != nil {
 		return nil, err
 	}
+	return parseHistory(data, name)
+}
+
+func parseHistory(data []byte, name string) (*api.History, error) {
 	var events []*api.HistoryEvent
 	if err := json.Unmarshal(data, &events); err == nil {
 		return &api.History{Events: events}, nil
@@ -85,6 +163,18 @@ func ReplayWorkflowHistory(logger *zap.Logger, history *api.History) error {
 // global registry.
 func ReplayWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string) error {
 	return (&WorkflowReplayer{registry: globalRegistry}).ReplayWorkflowHistoryFromJSONFile(logger, jsonfileName)
+}
+
+// ReplayPartialWorkflowHistoryFromJSONFile replays a JSON history up to
+// lastEventID against the global registry.
+func ReplayPartialWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string, lastEventID int64) error {
+	return (&WorkflowReplayer{registry: globalRegistry}).ReplayPartialWorkflowHistoryFromJSONFile(logger, jsonfileName, lastEventID)
+}
+
+// ReplayWorkflowExecution fetches a workflow's history from the service and
+// replays it against the global registry.
+func ReplayWorkflowExecution(ctx context.Context, service api.Service, logger *zap.Logger, domain string, execution WorkflowExecution) error {
+	return (&WorkflowReplayer{registry: globalRegistry}).ReplayWorkflowExecution(ctx, service, logger, domain, execution)
 }
 
 // ReplayWorkflowExecution fetches a workflow's history from the service and

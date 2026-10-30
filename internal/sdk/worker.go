@@ -290,6 +290,18 @@ func (w *Worker) resetSticky(entries []*stickyEntry, timeout time.Duration) {
 	wg.Wait()
 }
 
+var binaryChecksum atomic.Value
+
+// SetBinaryChecksum sets the checksum workers report with their decision
+// tasks and show in WorkflowInfo.BinaryChecksum. Call it before creating
+// workers.
+func SetBinaryChecksum(checksum string) { binaryChecksum.Store(checksum) }
+
+func getBinaryChecksum() string {
+	s, _ := binaryChecksum.Load().(string)
+	return s
+}
+
 // decisionPollers splits n decision pollers between the task list and
 // the worker's sticky task list.
 func decisionPollers(n int, sticky bool) (normal, onSticky int) {
@@ -601,7 +613,9 @@ func (w *Worker) handleDecision(task *api.PollForDecisionTaskResponse) {
 		w.decisionFailed(ctx, logger, scope, task, err)
 		return
 	}
-	req := &api.RespondDecisionTaskCompletedRequest{TaskToken: task.TaskToken, Decisions: decisions, Identity: w.opts.Identity}
+	req := &api.RespondDecisionTaskCompletedRequest{
+		TaskToken: task.TaskToken, Decisions: decisions, Identity: w.opts.Identity, BinaryChecksum: getBinaryChecksum(),
+	}
 	// Cache the run before answering: once the server has the answer, the
 	// run's next decision task can reach this worker's sticky task list.
 	var entry *stickyEntry

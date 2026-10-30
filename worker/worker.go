@@ -4,6 +4,7 @@ package worker
 
 import (
 	"context"
+	"io"
 
 	"go.uber.org/zap"
 
@@ -14,10 +15,22 @@ import (
 type (
 	// Registry registers workflows and activities.
 	Registry interface {
+		WorkflowRegistry
+		ActivityRegistry
+	}
+
+	// WorkflowRegistry registers workflows.
+	WorkflowRegistry interface {
 		RegisterWorkflow(w interface{})
 		RegisterWorkflowWithOptions(w interface{}, options sdk.RegisterWorkflowOptions)
+		GetRegisteredWorkflows() []sdk.RegistryWorkflowInfo
+	}
+
+	// ActivityRegistry registers activities.
+	ActivityRegistry interface {
 		RegisterActivity(a interface{})
 		RegisterActivityWithOptions(a interface{}, options sdk.RegisterActivityOptions)
+		GetRegisteredActivities() []sdk.RegistryActivityInfo
 	}
 
 	// Worker polls a task list and runs workflows and activities.
@@ -33,12 +46,18 @@ type (
 
 	// WorkflowReplayer replays histories against workflow code.
 	WorkflowReplayer interface {
-		RegisterWorkflow(w interface{})
-		RegisterWorkflowWithOptions(w interface{}, options sdk.RegisterWorkflowOptions)
+		WorkflowRegistry
+		ActivityRegistry
 		ReplayWorkflowHistory(logger *zap.Logger, history *api.History) error
+		ReplayWorkflowHistoryFromJSON(logger *zap.Logger, reader io.Reader) error
 		ReplayWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string) error
+		ReplayPartialWorkflowHistoryFromJSON(logger *zap.Logger, reader io.Reader, lastEventID int64) error
+		ReplayPartialWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string, lastEventID int64) error
 		ReplayWorkflowExecution(ctx context.Context, service api.Service, logger *zap.Logger, domain string, execution sdk.WorkflowExecution) error
 	}
+
+	// ReplayOptions configures a WorkflowReplayer.
+	ReplayOptions = sdk.ReplayOptions
 
 	// Options configures a worker.
 	Options = sdk.WorkerOptions
@@ -77,6 +96,27 @@ func AugmentWorkerOptions(options Options) Options { return sdk.AugmentWorkerOpt
 
 // NewWorkflowReplayer creates a replayer with its own registry.
 func NewWorkflowReplayer() WorkflowReplayer { return sdk.NewWorkflowReplayer() }
+
+// NewWorkflowReplayerWithOptions creates a replayer with options.
+func NewWorkflowReplayerWithOptions(options ReplayOptions) WorkflowReplayer {
+	return sdk.NewWorkflowReplayerWithOptions(options)
+}
+
+// ReplayPartialWorkflowHistoryFromJSONFile replays a JSON history up to
+// lastEventID against workflows registered globally.
+func ReplayPartialWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string, lastEventID int64) error {
+	return sdk.ReplayPartialWorkflowHistoryFromJSONFile(logger, jsonfileName, lastEventID)
+}
+
+// ReplayWorkflowExecution fetches a workflow's history and replays it
+// against workflows registered globally.
+func ReplayWorkflowExecution(ctx context.Context, service api.Service, logger *zap.Logger, domain string, execution sdk.WorkflowExecution) error {
+	return sdk.ReplayWorkflowExecution(ctx, service, logger, domain, execution)
+}
+
+// SetBinaryChecksum sets the checksum workers report with their decision
+// tasks. Call it before creating workers.
+func SetBinaryChecksum(checksum string) { sdk.SetBinaryChecksum(checksum) }
 
 // ReplayWorkflowHistory replays a history against workflows registered
 // globally (workflow.Register).

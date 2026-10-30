@@ -258,8 +258,12 @@ type replayerConfig struct {
 }
 
 func newReplayer(cfg replayerConfig) *replayer {
+	info := &WorkflowInfo{Domain: cfg.domain, WorkflowExecution: cfg.execution}
+	if sum := getBinaryChecksum(); sum != "" {
+		info.BinaryChecksum = &sum
+	}
 	r := &replayer{
-		info:        &WorkflowInfo{Domain: cfg.domain, WorkflowExecution: cfg.execution},
+		info:        info,
 		reg:         cfg.registry,
 		dc:          orDefault(cfg.dataConverter),
 		scope:       cfg.scope,

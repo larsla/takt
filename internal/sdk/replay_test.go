@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -116,5 +117,57 @@ func TestSplitHistory(t *testing.T) {
 	}
 	if bs[1].completed || bs[1].started.EventID != 13 || len(bs[1].inputs) != 1 || bs[1].inputs[0].EventID != 11 {
 		t.Fatalf("second batch %+v", bs[1])
+	}
+}
+
+func TestReplayerExtras(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	w := e.worker(WorkerOptions{}, func(w *Worker) {
+		w.RegisterWorkflowWithOptions(helloWorkflow, RegisterWorkflowOptions{Name: "greeter"})
+		w.RegisterActivity(greet)
+	})
+	if ws := w.GetRegisteredWorkflows(); len(ws) == 0 || ws[0].WorkflowType().Name == "" {
+		t.Fatalf("registered workflows %v", ws)
+	}
+	SetBinaryChecksum("build-1")
+	h := recordHistory(t, e, e.run("replay-extras", "greeter", "x"))
+	SetBinaryChecksum("")
+	data, _ := json.Marshal(h)
+	for _, ev := range h.Events {
+		if a := ev.DecisionTaskCompletedEventAttributes; a != nil && a.BinaryChecksum != "build-1" {
+			t.Fatalf("binary checksum %q", a.BinaryChecksum)
+		}
+	}
+
+	r := NewWorkflowReplayerWithOptions(ReplayOptions{DataConverter: GetDefaultDataConverter()})
+	r.RegisterWorkflowWithOptions(helloWorkflow, RegisterWorkflowOptions{Name: "greeter"})
+	r.RegisterActivity(greet)
+	if len(r.GetRegisteredActivities()) == 0 {
+		t.Fatal("replayer activities")
+	}
+	if err := r.ReplayWorkflowHistoryFromJSON(nil, bytes.NewReader(data)); err != nil {
+		t.Fatal(err)
+	}
+	// Stop after the first decision task completed.
+	var last int64
+	for _, ev := range h.Events {
+		if ev.EventType == api.EventTypeDecisionTaskCompleted {
+			last = ev.EventID
+			break
+		}
+	}
+	if err := r.ReplayPartialWorkflowHistoryFromJSON(nil, bytes.NewReader(data), last); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "h.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReplayPartialWorkflowHistoryFromJSONFile(nil, path, last); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReplayWorkflowHistoryFromJSON(nil, strings.NewReader("not json")); err == nil {
+		t.Fatal("bad JSON replayed")
 	}
 }
