@@ -27,7 +27,9 @@ type RegisterActivityOptions struct {
 	DisableAlreadyRegisteredCheck bool
 	// EnableShortName registers struct methods under their bare method name.
 	EnableShortName bool
-	// EnableAutoHeartbeat is accepted for compatibility and ignored.
+	// EnableAutoHeartbeat sends heartbeats for the activity at half its
+	// HeartbeatTimeout while it runs, repeating the last recorded details.
+	// It has no effect when the activity has no HeartbeatTimeout.
 	EnableAutoHeartbeat bool
 }
 
@@ -37,6 +39,9 @@ type registry struct {
 	workflowAlias map[string]string
 	activities    map[string]interface{}
 	activityAlias map[string]string
+	// autoHeartbeat holds the activity types registered with
+	// EnableAutoHeartbeat.
+	autoHeartbeat map[string]bool
 	parent        *registry
 }
 
@@ -46,6 +51,7 @@ func newRegistry(parent *registry) *registry {
 		workflowAlias: map[string]string{},
 		activities:    map[string]interface{}{},
 		activityAlias: map[string]string{},
+		autoHeartbeat: map[string]bool{},
 		parent:        parent,
 	}
 }
@@ -150,7 +156,7 @@ func (r *registry) RegisterActivityWithOptions(a interface{}, opts RegisterActiv
 	if name == "" {
 		name = fnName
 	}
-	if err := r.addActivity(name, fnName, a, opts.DisableAlreadyRegisteredCheck); err != nil {
+	if err := r.addActivity(name, fnName, a, opts); err != nil {
 		panic(err)
 	}
 }
@@ -180,7 +186,7 @@ func (r *registry) registerActivityStruct(a interface{}, opts RegisterActivityOp
 		default:
 			name = fnName
 		}
-		if err := r.addActivity(name, fnName, mv.Interface(), opts.DisableAlreadyRegisteredCheck); err != nil {
+		if err := r.addActivity(name, fnName, mv.Interface(), opts); err != nil {
 			return err
 		}
 		count++
@@ -191,15 +197,16 @@ func (r *registry) registerActivityStruct(a interface{}, opts RegisterActivityOp
 	return nil
 }
 
-func (r *registry) addActivity(name, fnName string, fn interface{}, skipCheck bool) error {
+func (r *registry) addActivity(name, fnName string, fn interface{}, opts RegisterActivityOptions) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !skipCheck {
+	if !opts.DisableAlreadyRegisteredCheck {
 		if _, ok := r.activities[name]; ok {
 			return fmt.Errorf("activity type \"%v\" is already registered", name)
 		}
 	}
 	r.activities[name] = fn
+	r.autoHeartbeat[name] = opts.EnableAutoHeartbeat
 	if name != fnName {
 		r.activityAlias[fnName] = name
 	}
@@ -224,6 +231,18 @@ func (r *registry) getActivity(name string) (interface{}, bool) {
 		return r.parent.getActivity(name)
 	}
 	return fn, ok
+}
+
+// isAutoHeartbeat reports whether an activity type was registered with
+// EnableAutoHeartbeat.
+func (r *registry) isAutoHeartbeat(name string) bool {
+	r.mu.RLock()
+	auto, ok := r.autoHeartbeat[name]
+	r.mu.RUnlock()
+	if !ok && r.parent != nil {
+		return r.parent.isAutoHeartbeat(name)
+	}
+	return auto
 }
 
 func (r *registry) alias(fnName string, activity bool) (string, bool) {

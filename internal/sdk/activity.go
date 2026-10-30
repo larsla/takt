@@ -53,9 +53,12 @@ type activityEnv struct {
 	cancel          context.CancelFunc
 	cancelRequested bool
 	lastSent        time.Time
-	pending         []byte
-	hasPending      bool
-	flushTimer      *time.Timer
+	// lastDetails are the details of the latest heartbeat, which automatic
+	// heartbeats repeat.
+	lastDetails []byte
+	pending     []byte
+	hasPending  bool
+	flushTimer  *time.Timer
 }
 
 // GetActivityInfo returns information about the running activity.
@@ -107,11 +110,13 @@ func (env *activityEnv) throttle() time.Duration {
 }
 
 func (env *activityEnv) heartbeat(data []byte) {
+	env.mu.Lock()
+	env.lastDetails = data
 	if env.noThrottle {
+		env.mu.Unlock()
 		env.send(data)
 		return
 	}
-	env.mu.Lock()
 	if wait := env.throttle() - time.Since(env.lastSent); wait > 0 {
 		env.pending, env.hasPending = data, true
 		if env.flushTimer == nil {
@@ -137,6 +142,31 @@ func (env *activityEnv) flush() {
 	env.lastSent = time.Now()
 	env.mu.Unlock()
 	env.send(data)
+}
+
+// autoHeartbeat sends a heartbeat with the last recorded details every
+// interval in which the activity sent none, until ctx ends.
+func (env *activityEnv) autoHeartbeat(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-env.workerStop:
+			return
+		case <-t.C:
+		}
+		env.mu.Lock()
+		if time.Since(env.lastSent) < interval {
+			env.mu.Unlock()
+			continue
+		}
+		env.lastSent = time.Now()
+		data := env.lastDetails
+		env.mu.Unlock()
+		env.send(data)
+	}
 }
 
 func (env *activityEnv) stopHeartbeats() {

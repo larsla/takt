@@ -614,3 +614,35 @@ func TestWorkflowErrors(t *testing.T) {
 		t.Fatalf("got %T %v", err, err)
 	}
 }
+
+func silentActivity(ctx context.Context) (string, error) {
+	RecordActivityHeartbeat(ctx, "started")
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(3500 * time.Millisecond):
+	}
+	return fmt.Sprintf("attempt %d", GetActivityInfo(ctx).Attempt), nil
+}
+
+func silentActivityWorkflow(ctx Context) (string, error) {
+	ctx = WithActivityOptions(ctx, ActivityOptions{
+		ScheduleToStartTimeout: time.Minute, StartToCloseTimeout: time.Minute, HeartbeatTimeout: time.Second,
+	})
+	var result string
+	err := ExecuteActivity(ctx, silentActivity).Get(ctx, &result)
+	return result, err
+}
+
+func TestAutoHeartbeat(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	e.worker(WorkerOptions{}, func(w *Worker) {
+		w.RegisterWorkflow(silentActivityWorkflow)
+		w.RegisterActivityWithOptions(silentActivity, RegisterActivityOptions{EnableAutoHeartbeat: true})
+	})
+	var result string
+	if err := e.run("auto-heartbeat", silentActivityWorkflow).Get(e.ctx, &result); err != nil || result != "attempt 0" {
+		t.Fatalf("result %q, err %v", result, err)
+	}
+}

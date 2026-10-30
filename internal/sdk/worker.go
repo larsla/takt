@@ -566,12 +566,23 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 		scope:            tagged(w.scope, tagActivityType, name),
 		identity:         w.opts.Identity,
 		heartbeatDetails: task.HeartbeatDetails,
+		lastDetails:      task.HeartbeatDetails,
 		workerStop:       w.stopC,
 	}
 	ctx, cancel := context.WithDeadline(w.opts.BackgroundActivityContext, deadline)
 	defer cancel()
 	env.cancel = cancel
 	ctx = context.WithValue(ctx, activityEnvKey, env)
+	stopAuto := func() {}
+	if env.info.HeartbeatTimeout > 0 && w.isAutoHeartbeat(name) {
+		hbCtx, hbCancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			env.autoHeartbeat(hbCtx, env.info.HeartbeatTimeout/2)
+		}()
+		stopAuto = func() { hbCancel(); <-done }
+	}
 
 	scope := tagged(w.activityScope, tagActivityType, name)
 	var result []byte
@@ -583,6 +594,7 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 		err = fmt.Errorf("unable to find activityType=%v. Supported types: %v", name, w.activityNames())
 	}
 	ctxErr := ctx.Err()
+	stopAuto()
 	env.stopHeartbeats()
 	scope.Timer(MetricActivityExecutionLatency).Record(time.Since(execStart))
 	var pe *PanicError
