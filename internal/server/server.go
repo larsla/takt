@@ -52,6 +52,7 @@ type Server struct {
 	sem    chan struct{}
 	cons   []jetstream.ConsumeContext
 	scope  tally.Scope
+	nc     *nats.Conn
 }
 
 const requestTimeout = 2 * time.Minute
@@ -80,7 +81,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, err
 	}
 	sctx, cancel := context.WithCancel(context.Background())
-	s := &Server{e: e, log: cfg.Logger, ctx: sctx, cancel: cancel, sem: make(chan struct{}, cfg.MaxConcurrent), scope: cfg.Metrics}
+	s := &Server{e: e, log: cfg.Logger, ctx: sctx, cancel: cancel, sem: make(chan struct{}, cfg.MaxConcurrent), scope: cfg.Metrics, nc: cfg.NC}
 	if err := e.StartIndex(sctx); err != nil {
 		cancel()
 		return nil, fmt.Errorf("visibility index: %w", err)
@@ -249,9 +250,12 @@ func handle[Req, Resp any](s *Server, f func(context.Context, *Req) (Resp, error
 				s.respondError(r, err)
 				return
 			}
-			if err := r.RespondJSON(resp); err != nil {
-				s.log.Warn("respond", "subject", r.Subject(), "err", err)
+			data, err := json.Marshal(resp)
+			if err != nil {
+				s.respondError(r, err)
+				return
 			}
+			s.reply(r, &nats.Msg{Data: data})
 		})
 	})
 }
@@ -269,7 +273,21 @@ func (s *Server) respondError(r micro.Request, err error) {
 		s.log.Error("request failed", "subject", r.Subject(), "err", err)
 	}
 	desc := strings.ReplaceAll(err.Error(), "\n", " ")
-	if rerr := r.Error(code, desc, data); rerr != nil {
-		s.log.Warn("respond error", "subject", r.Subject(), "err", rerr)
+	s.reply(r, &nats.Msg{
+		Header: nats.Header{micro.ErrorHeader: {desc}, micro.ErrorCodeHeader: {code}},
+		Data:   data,
+	})
+}
+
+// reply publishes msg to the reply subject of r. The respond methods of
+// micro.Request write fields that micro reads as soon as the handler
+// returns, and handlers here answer later from their own goroutine.
+func (s *Server) reply(r micro.Request, msg *nats.Msg) {
+	msg.Subject = r.Reply()
+	if msg.Subject == "" {
+		return
+	}
+	if err := s.nc.PublishMsg(msg); err != nil {
+		s.log.Warn("respond", "subject", r.Subject(), "err", err)
 	}
 }
