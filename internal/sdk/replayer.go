@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/opentracing/opentracing-go"
 	"github.com/uber-go/tally"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -206,6 +207,7 @@ type replayer struct {
 	laExec   laExecutor
 	props    []ContextPropagator
 	header   *api.Header
+	tracer   opentracing.Tracer
 	run      *workflowRun
 	now      time.Time
 	replay   bool
@@ -250,6 +252,7 @@ type replayerConfig struct {
 	enableLoggingInReplay bool
 	laExec                laExecutor
 	propagators           []ContextPropagator
+	tracer                opentracing.Tracer
 }
 
 func newReplayer(cfg replayerConfig) *replayer {
@@ -260,6 +263,7 @@ func newReplayer(cfg replayerConfig) *replayer {
 		scope:       cfg.scope,
 		laExec:      cfg.laExec,
 		props:       cfg.propagators,
+		tracer:      cfg.tracer,
 		acts:        map[string]*actHandle{},
 		actBySch:    map[int64]string{},
 		timers:      map[string]*timerHandle{},
@@ -860,6 +864,8 @@ func (r *replayer) MetricsScope() tally.Scope { return r.scope }
 func (r *replayer) ContextPropagators() []ContextPropagator { return r.props }
 
 func (r *replayer) StartHeader() *api.Header { return r.header }
+
+func (r *replayer) Tracer() opentracing.Tracer { return r.tracer }
 
 func (r *replayer) NextID() string {
 	r.counter++

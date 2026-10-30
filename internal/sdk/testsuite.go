@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opentracing/opentracing-go"
 	"github.com/stretchr/testify/mock"
 	"github.com/uber-go/tally"
 	"go.uber.org/zap"
@@ -500,6 +501,8 @@ func (w *testWorkflow) MetricsScope() tally.Scope { return w.env.scope }
 func (w *testWorkflow) ContextPropagators() []ContextPropagator { return w.env.props }
 
 func (w *testWorkflow) StartHeader() *api.Header { return w.header }
+
+func (w *testWorkflow) Tracer() opentracing.Tracer { return w.env.opts.Tracer }
 
 func (w *testWorkflow) NextID() string {
 	w.counter++

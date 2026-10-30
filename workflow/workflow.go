@@ -7,6 +7,7 @@ package workflow
 import (
 	"time"
 
+	"github.com/opentracing/opentracing-go"
 	"github.com/uber-go/tally"
 	"go.uber.org/zap"
 
@@ -94,6 +95,16 @@ var (
 	// ErrDeadlineExceeded is the error of a context past its deadline.
 	ErrDeadlineExceeded = sdk.ErrDeadlineExceeded
 )
+
+// GetSpanContext returns the tracing span context of a workflow context,
+// or nil.
+func GetSpanContext(ctx Context) opentracing.SpanContext { return sdk.GetSpanContext(ctx) }
+
+// WithSpanContext returns a workflow context with a tracing span context,
+// which activities and child workflows started from it continue.
+func WithSpanContext(ctx Context, spanContext opentracing.SpanContext) Context {
+	return sdk.WithSpanContext(ctx, spanContext)
+}
 
 // NewTimeoutError creates a TimeoutError, for unit tests of workflows.
 func NewTimeoutError(timeoutType api.TimeoutType, details ...interface{}) *TimeoutError {

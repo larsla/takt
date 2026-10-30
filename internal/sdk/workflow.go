@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/opentracing/opentracing-go"
 	"github.com/uber-go/tally"
 	"go.uber.org/zap"
 
@@ -113,6 +114,7 @@ type workflowEnvironment interface {
 	// ContextPropagators and StartHeader set up the root context.
 	ContextPropagators() []ContextPropagator
 	StartHeader() *api.Header
+	Tracer() opentracing.Tracer
 
 	ExecuteActivity(p activityParams, cb resultHandler) string
 	RequestCancelActivity(activityID string)
@@ -185,6 +187,16 @@ func newWorkflowRun(env workflowEnvironment, fn interface{}, input []byte) *work
 		if err != nil {
 			// A panic fails the decision task, as in Cadence.
 			panic(err.Error())
+		}
+		if tracer := env.Tracer(); !env.IsReplaying() && !isNoopTracer(tracer) {
+			info := env.WorkflowInfo()
+			_, span := startSpan(context.Background(), tracer, spanNameExecuteWorkflow, opentracing.Tags{
+				tagSpanWorkflowType: info.WorkflowType.Name,
+				tagSpanWorkflowID:   info.WorkflowExecution.ID,
+				tagSpanRunID:        info.WorkflowExecution.RunID,
+			}, GetSpanContext(ctx))
+			defer span.Finish()
+			ctx = WithSpanContext(ctx, span.Context())
 		}
 		result, err := r.invoke(ctx, fn, input)
 		env.Complete(result, err)

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/opentracing/opentracing-go"
 	"github.com/uber-go/tally"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
@@ -92,6 +93,10 @@ type WorkerOptions struct {
 	// ContextPropagators carry context values into workflows and activities
 	// through headers; see ContextPropagator.
 	ContextPropagators []ContextPropagator
+	// Tracer, when set, records takt-ExecuteWorkflow, takt-ExecuteActivity
+	// and takt-ExecuteLocalActivity spans and carries span contexts in
+	// headers.
+	Tracer opentracing.Tracer
 	// EnableSessionWorker makes Start fail: takt doesn't support sessions.
 	// MaxConcurrentSessionExecutionSize is ignored.
 	EnableSessionWorker               bool
@@ -206,6 +211,8 @@ type Worker struct {
 	laLimit   *rate.Limiter
 	queryStop func()
 	cache     *stickyCache
+	// props are the context propagators, the tracing one included.
+	props []ContextPropagator
 	// raw is the service as given; service records metrics around it.
 	raw           api.Service
 	scope         tally.Scope // tagged with domain and task list
@@ -228,6 +235,7 @@ func NewWorker(service api.Service, domain, taskList string, options WorkerOptio
 		opts:     options,
 		logger:   options.Logger.With(zap.String("Domain", domain), zap.String("TaskList", taskList), zap.String("WorkerID", options.Identity)),
 		stopC:    make(chan struct{}),
+		props:    withTracing(options.ContextPropagators, options.Tracer),
 		laSem:    make(chan struct{}, options.MaxConcurrentLocalActivityExecutionSize),
 		laLimit:  limiter(options.WorkerLocalActivitiesPerSecond),
 
@@ -501,7 +509,8 @@ func (w *Worker) newReplayer(exec *api.WorkflowExecution, wfType string, logger 
 		scope:                 tagged(w.scope, tagWorkflowType, wfType),
 		enableLoggingInReplay: w.opts.EnableLoggingInReplay,
 		laExec:                la,
-		propagators:           w.opts.ContextPropagators,
+		propagators:           w.props,
+		tracer:                w.opts.Tracer,
 	})
 }
 
@@ -713,10 +722,20 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 	var result []byte
 	execStart := time.Now()
 	fn, ok := w.getActivity(name)
-	pctx, err := extractHeader(ctx, w.opts.ContextPropagators, task.Header)
+	pctx, err := extractHeader(ctx, w.props, task.Header)
 	switch {
 	case err != nil:
 	case ok:
+		if w.opts.Tracer != nil {
+			var span opentracing.Span
+			pctx, span = startSpanFromHeader(pctx, w.opts.Tracer, spanNameExecuteActivity, opentracing.Tags{
+				tagSpanWorkflowType: task.WorkflowType.Name,
+				tagSpanWorkflowID:   task.WorkflowExecution.WorkflowID,
+				tagSpanRunID:        task.WorkflowExecution.RunID,
+				tagSpanActivityType: name,
+			})
+			defer span.Finish()
+		}
 		result, err = runActivity(pctx, fn, task.Input, w.opts.DataConverter)
 	default:
 		err = fmt.Errorf("unable to find activityType=%v. Supported types: %v", name, w.activityNames())
@@ -792,10 +811,20 @@ func (w *Worker) executeLocal(ctx context.Context, info *WorkflowInfo, p localAc
 	scope := tagged(w.scope, tagWorkerType, workerTypeLocalActivity, tagActivityType, p.activityType)
 	scope.Counter(MetricLocalActivityTotal).Inc(1)
 	start := time.Now()
-	ctx, err := extractHeader(ctx, w.opts.ContextPropagators, p.header)
+	ctx, err := extractHeader(ctx, w.props, p.header)
 	if err != nil {
 		scope.Counter(MetricLocalActivityFailed).Inc(1)
 		return laOutcome{err: err}
+	}
+	if w.opts.Tracer != nil {
+		var span opentracing.Span
+		ctx, span = startSpanFromHeader(ctx, w.opts.Tracer, spanNameExecuteLocalActivity, opentracing.Tags{
+			tagSpanWorkflowType: info.WorkflowType.Name,
+			tagSpanWorkflowID:   info.WorkflowExecution.ID,
+			tagSpanRunID:        info.WorkflowExecution.RunID,
+			tagSpanActivityType: p.activityType,
+		})
+		defer span.Finish()
 	}
 	out := runLocalActivity(ctx, info, p, w.opts.DataConverter, w.logger, tagged(w.scope, tagActivityType, p.activityType), w.stopC)
 	scope.Timer(MetricLocalActivityExecutionLatency).Record(time.Since(start))

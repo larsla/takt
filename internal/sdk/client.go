@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/opentracing/opentracing-go"
 	"github.com/uber-go/tally"
 
 	"github.com/larsla/takt/api"
@@ -21,6 +22,9 @@ type ClientOptions struct {
 	// ContextPropagators write context values into the header of the
 	// workflows this client starts; see ContextPropagator.
 	ContextPropagators []ContextPropagator
+	// Tracer, when set, records a span for each workflow start and carries
+	// its context to the workflow.
+	Tracer opentracing.Tracer
 	// FeatureFlags and IsolationGroup are accepted for compatibility and
 	// ignored.
 	FeatureFlags   FeatureFlags
@@ -118,6 +122,7 @@ type workflowClient struct {
 	identity string
 	scope    tally.Scope
 	props    []ContextPropagator
+	tracer   opentracing.Tracer
 }
 
 // NewClient creates a client for a domain.
@@ -136,11 +141,11 @@ func NewClient(service api.Service, domain string, options *ClientOptions) Clien
 	scope := tagged(o.MetricsScope, tagDomain, domain)
 	return &workflowClient{
 		service: withServiceMetrics(service, scope), domain: domain, dc: orDefault(o.DataConverter), identity: o.Identity, scope: scope,
-		props: o.ContextPropagators,
+		props: withTracing(o.ContextPropagators, o.Tracer), tracer: o.Tracer,
 	}
 }
 
-func (c *workflowClient) startRequest(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args []interface{}) (*api.StartWorkflowExecutionRequest, error) {
+func (c *workflowClient) startRequest(ctx context.Context, spanPrefix string, options StartWorkflowOptions, workflow interface{}, args []interface{}) (*api.StartWorkflowExecutionRequest, error) {
 	if options.TaskList == "" {
 		return nil, errors.New("missing TaskList")
 	}
@@ -207,6 +212,7 @@ func (c *workflowClient) startRequest(ctx context.Context, options StartWorkflow
 	if req.RequestID == "" {
 		req.RequestID = uuid.NewString()
 	}
+	ctx = startClientSpan(ctx, c.tracer, spanPrefix+"-"+req.WorkflowType.Name, id, options.CronSchedule != "")
 	if req.Header, err = injectHeader(ctx, c.props); err != nil {
 		return nil, err
 	}
@@ -224,7 +230,7 @@ func (c *workflowClient) startRequest(ctx context.Context, options StartWorkflow
 
 // StartWorkflow starts a workflow and returns its execution.
 func (c *workflowClient) StartWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecution, error) {
-	req, err := c.startRequest(ctx, options, workflow, args)
+	req, err := c.startRequest(ctx, "StartWorkflow", options, workflow, args)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +354,7 @@ func (c *workflowClient) SignalWorkflow(ctx context.Context, workflowID, runID, 
 func (c *workflowClient) SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, signalArg interface{},
 	options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecution, error) {
 	options.ID = workflowID
-	req, err := c.startRequest(ctx, options, workflow, workflowArgs)
+	req, err := c.startRequest(ctx, "SignalWithStartWorkflow", options, workflow, workflowArgs)
 	if err != nil {
 		return nil, err
 	}
