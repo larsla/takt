@@ -115,10 +115,13 @@ type WorkerOptions struct {
 // AutoScalerOptions configures Cadence's poller autoscaler. takt accepts
 // it for compatibility and ignores it.
 type AutoScalerOptions struct {
-	Enabled        bool
-	Cooldown       time.Duration
-	PollerMinCount int
-	PollerMaxCount int
+	Enabled                  bool
+	Cooldown                 time.Duration
+	PollerMinCount           int
+	PollerMaxCount           int
+	PollerInitCount          int
+	PollerWaitTimeLowerBound time.Duration
+	PollerWaitTimeUpperBound time.Duration
 }
 
 // FeatureFlags toggles Cadence client features. takt accepts them for
