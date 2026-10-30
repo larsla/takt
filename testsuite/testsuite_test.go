@@ -546,3 +546,84 @@ func (s *UnitTestSuite) Test_WorkerOptionsAndTaskLists() {
 	s.NoError(env.GetWorkflowResult(&prev))
 	s.Equal("previous", prev)
 }
+
+func countingCronWorkflow(ctx workflow.Context) (int, error) {
+	n := 0
+	if workflow.HasLastCompletionResult(ctx) {
+		if err := workflow.GetLastCompletionResult(ctx, &n); err != nil {
+			return 0, err
+		}
+	}
+	return n + 1, nil
+}
+
+func (s *UnitTestSuite) TestCronIterations() {
+	env := s.NewTestWorkflowEnvironment()
+	env.SetWorkflowCronSchedule("* * * * *").SetWorkflowCronMaxIterations(3)
+	env.ExecuteWorkflow(countingCronWorkflow)
+	var n int
+	s.NoError(env.GetWorkflowResult(&n))
+	s.Equal(4, n) // the first run and three more
+}
+
+func bufferedSignalsWorkflow(ctx workflow.Context) ([]string, error) {
+	ch := workflow.GetSignalChannel(ctx, "s")
+	var got []string
+	for len(got) < 3 {
+		var v string
+		ch.Receive(ctx, &v)
+		got = append(got, v)
+		// Everything sent together is already buffered.
+		for ch.ReceiveAsync(&v) {
+			got = append(got, v+"*")
+		}
+	}
+	return got, nil
+}
+
+func (s *UnitTestSuite) TestSignalWorkflowSkippingDecision() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflowSkippingDecision("s", "a")
+		env.SignalWorkflowSkippingDecision("s", "b")
+	}, time.Second)
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow("s", "c") }, 2*time.Second)
+	env.ExecuteWorkflow(bufferedSignalsWorkflow)
+	var got []string
+	s.NoError(env.GetWorkflowResult(&got))
+	s.Equal([]string{"a", "b*", "c*"}, got)
+}
+
+func childFailsToStartWorkflow(ctx workflow.Context) (string, error) {
+	ctx = workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{ExecutionStartToCloseTimeout: time.Minute})
+	f := workflow.ExecuteChildWorkflow(ctx, countingCronWorkflow)
+	if err := f.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+		return "start failed", nil
+	}
+	return "started", nil
+}
+
+func (s *UnitTestSuite) TestMockExtras() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(countingCronWorkflow)
+	env.OnWorkflow(countingCronWorkflow, mock.Anything).Return(0, testsuite.ErrMockStartChildWorkflowFailed)
+	var ran atomic.Bool
+	env.OnActivity(greetActivity, mock.Anything, mock.Anything).Return("x", nil).Maybe().Run(func(mock.Arguments) { ran.Store(true) })
+	env.ExecuteWorkflow(childFailsToStartWorkflow)
+	var got string
+	s.NoError(env.GetWorkflowResult(&got))
+	s.Equal("start failed", got)
+	s.False(ran.Load())
+	env.AssertExpectations(s.T())
+	s.NotEmpty(env.GetRegisteredWorkflows())
+	s.NotEmpty(env.GetRegisteredActivities())
+
+	env = s.NewTestWorkflowEnvironment()
+	env.OnActivity(greetActivity, mock.Anything, mock.Anything).Return("mocked", nil).Run(func(args mock.Arguments) {
+		ran.Store(args.String(1) == "ann")
+	})
+	env.ExecuteWorkflow(greetingWorkflow, "ann")
+	s.NoError(env.GetWorkflowResult(&got))
+	s.Equal("mocked", got)
+	s.True(ran.Load())
+}

@@ -31,3 +31,7 @@ type (
 	// MockCallWrapper configures a mocked call.
 	MockCallWrapper = sdk.MockCallWrapper
 )
+
+// ErrMockStartChildWorkflowFailed, returned by a mocked child workflow,
+// makes the child fail to start.
+var ErrMockStartChildWorkflowFailed = sdk.ErrMockStartChildWorkflowFailed

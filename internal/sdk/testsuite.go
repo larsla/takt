@@ -146,6 +146,14 @@ type testEnv struct {
 	clock    mockClock
 	props    []ContextPropagator
 	header   *api.Header
+	// cron reruns the root workflow up to cronMax times (forever when
+	// negative) after it closes, as Cadence's test environment does.
+	cron           string
+	cronMax        int
+	cronIterations int
+	// skipped holds signals sent with SignalWorkflowSkippingDecision,
+	// delivered with the next signal, cancel or activity completion.
+	skipped []func()
 
 	callbacks chan func()
 	running   int
@@ -200,6 +208,7 @@ func newTestEnv(s *WorkflowTestSuite, m *mock.Mock) *testEnv {
 		scope:     s.scope,
 		props:     s.props,
 		header:    s.header,
+		cronMax:   -1,
 		opts:      WorkerOptions{DataConverter: defaultConverter, BackgroundActivityContext: context.Background()},
 		clock:     mockClock{now: time.Now()},
 		callbacks: make(chan func(), 1024),
@@ -222,13 +231,31 @@ type MockCallWrapper struct {
 	env     *testEnv
 	delay   time.Duration
 	delayFn func() time.Duration
+	runFn   func(args mock.Arguments)
 }
 
 func (e *testEnv) wrap(call *mock.Call) *MockCallWrapper {
 	w := &MockCallWrapper{call: call, env: e}
-	call.Run(func(mock.Arguments) { e.lastMatched = w })
+	call.Run(func(args mock.Arguments) {
+		e.lastMatched = w
+		if w.runFn != nil {
+			w.runFn(args)
+		}
+	})
 	return w
 }
+
+// ErrMockStartChildWorkflowFailed, returned by a mocked child workflow,
+// makes the child fail to start instead of failing after it started.
+var ErrMockStartChildWorkflowFailed = fmt.Errorf("start child workflow failed: %v", api.ChildWorkflowExecutionFailedCauseWorkflowAlreadyRunning)
+
+// Maybe makes the mock optional: AssertExpectations doesn't fail when it
+// wasn't called.
+func (c *MockCallWrapper) Maybe() *MockCallWrapper { c.call.Maybe(); return c }
+
+// Run sets a function the mock calls with the call's arguments before it
+// returns.
+func (c *MockCallWrapper) Run(fn func(args mock.Arguments)) *MockCallWrapper { c.runFn = fn; return c }
 
 // Once makes the mock match once.
 func (c *MockCallWrapper) Once() *MockCallWrapper { c.call.Once(); return c }
@@ -894,10 +921,18 @@ func (w *testWorkflow) ExecuteChildWorkflow(p childParams, cb resultHandler, sta
 	exec := WorkflowExecution{ID: p.workflowID, RunID: p.workflowID + "_run"}
 	w.children[p.workflowID] = c
 	if e.hasMock(p.workflowType) {
-		started(exec, nil)
 		fn, _ := e.registry.getWorkflow(p.workflowType)
 		ctx := w.run.root
 		rets, delay := e.callMock(p.workflowType, mockArgs(fn, ctx, p.args))
+		if len(rets) > 0 {
+			if err, ok := rets[len(rets)-1].(error); ok && errors.Is(err, ErrMockStartChildWorkflowFailed) {
+				delete(w.children, p.workflowID)
+				started(WorkflowExecution{}, err)
+				cb(nil, err)
+				return
+			}
+		}
+		started(exec, nil)
 		e.clock.add(delay, func() {
 			result, err := e.mockResult(ctx, p.workflowType, typeOf(fn), rets, p.args)
 			c.done(result, e.roundTrip(err))

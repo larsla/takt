@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/larsla/takt/api"
@@ -120,6 +121,26 @@ func (e *TestWorkflowEnvironment) ExecuteWorkflow(workflowFn interface{}, args .
 	if err != nil {
 		panic(err)
 	}
+	if impl.cron != "" {
+		if _, err := cron.ParseStandard(impl.cron); err != nil {
+			panic(fmt.Errorf("invalid cron schedule %v, err: %w", impl.cron, err))
+		}
+	}
+	impl.runRoot(workflowFn, fn, input)
+	// A cron workflow runs again right away, with the last result, as in
+	// Cadence's test environment.
+	for impl.cron != "" && impl.root.completed && (impl.cronMax < 0 || impl.cronIterations < impl.cronMax) {
+		impl.cronIterations++
+		if impl.root.err == nil {
+			impl.lastCompletion = impl.root.result
+		}
+		impl.workflows = nil
+		impl.runRoot(workflowFn, fn, input)
+	}
+}
+
+// runRoot runs the root workflow until it closes or blocks for good.
+func (impl *testEnv) runRoot(workflowFn, fn interface{}, input []byte) {
 	timeout := impl.wfTimeout
 	if timeout == 0 {
 		timeout = 10 * 365 * 24 * time.Hour
@@ -135,6 +156,10 @@ func (e *TestWorkflowEnvironment) ExecuteWorkflow(workflowFn interface{}, args .
 		lastCompletionResult:                impl.lastCompletion,
 		Memo:                                impl.memo,
 		SearchAttributes:                    impl.searchAttrs,
+	}
+	if impl.cron != "" {
+		cs := impl.cron
+		info.CronSchedule = &cs
 	}
 	impl.root = impl.newWorkflow(info, nil)
 	impl.root.header = impl.header
@@ -183,6 +208,7 @@ func (e *TestWorkflowEnvironment) GetWorkflowError() error {
 // CompleteActivity completes an activity that returned ErrResultPending.
 func (e *TestWorkflowEnvironment) CompleteActivity(taskToken []byte, result interface{}, err error) error {
 	impl := e.impl
+	impl.flushSkipped()
 	impl.asyncMu.Lock()
 	a, ok := impl.tokens[string(taskToken)]
 	impl.asyncMu.Unlock()
@@ -218,6 +244,7 @@ func (e *TestWorkflowEnvironment) CompleteActivity(taskToken []byte, result inte
 // delayed callback.
 func (e *TestWorkflowEnvironment) CancelWorkflow() {
 	impl := e.impl
+	impl.flushSkipped()
 	cancel := func() {
 		if impl.root.cancelHandler != nil {
 			impl.root.cancelHandler()
@@ -233,6 +260,11 @@ func (e *TestWorkflowEnvironment) CancelWorkflow() {
 
 // SignalWorkflow sends a signal to the workflow.
 func (e *TestWorkflowEnvironment) SignalWorkflow(name string, input interface{}) {
+	e.impl.flushSkipped()
+	e.signal(name, input)
+}
+
+func (e *TestWorkflowEnvironment) signal(name string, input interface{}) {
 	impl := e.impl
 	data, err := encodeArgs(impl.dc(), []interface{}{input})
 	if err != nil {
@@ -243,6 +275,48 @@ func (e *TestWorkflowEnvironment) SignalWorkflow(name string, input interface{})
 		return
 	}
 	impl.root.signal(name, data)
+}
+
+// SignalWorkflowSkippingDecision sends a signal that the workflow sees
+// together with the next SignalWorkflow, CancelWorkflow or
+// CompleteActivity, to test a workflow handling several buffered signals.
+func (e *TestWorkflowEnvironment) SignalWorkflowSkippingDecision(name string, input interface{}) {
+	e.impl.skipped = append(e.impl.skipped, func() { e.signal(name, input) })
+}
+
+func (impl *testEnv) flushSkipped() {
+	skipped := impl.skipped
+	impl.skipped = nil
+	for _, f := range skipped {
+		f()
+	}
+}
+
+// SetWorkflowCronSchedule makes the workflow a cron workflow: when it
+// closes, it runs again right away with its result as the last
+// completion result.
+func (e *TestWorkflowEnvironment) SetWorkflowCronSchedule(cron string) *TestWorkflowEnvironment {
+	e.impl.cron = cron
+	return e
+}
+
+// SetWorkflowCronMaxIterations limits how many times a cron workflow runs
+// again; negative means no limit.
+func (e *TestWorkflowEnvironment) SetWorkflowCronMaxIterations(maxIterations int) *TestWorkflowEnvironment {
+	e.impl.cronMax = maxIterations
+	return e
+}
+
+// GetRegisteredWorkflows returns the workflows registered with the
+// environment and its suite.
+func (e *TestWorkflowEnvironment) GetRegisteredWorkflows() []RegistryWorkflowInfo {
+	return e.impl.registry.GetRegisteredWorkflows()
+}
+
+// GetRegisteredActivities returns the activities registered with the
+// environment and its suite.
+func (e *TestWorkflowEnvironment) GetRegisteredActivities() []RegistryActivityInfo {
+	return e.impl.registry.GetRegisteredActivities()
 }
 
 // SignalWorkflowByID sends a signal to a workflow (the root or a child) by ID.
@@ -426,6 +500,12 @@ func (e *TestWorkflowEnvironment) SetOnLocalActivityCanceledListener(listener fu
 // WorkflowTestSuite.NewTestActivityEnvironment.
 type TestActivityEnvironment struct {
 	impl *testEnv
+}
+
+// GetRegisteredActivities returns the activities registered with the
+// environment and its suite.
+func (e *TestActivityEnvironment) GetRegisteredActivities() []RegistryActivityInfo {
+	return e.impl.registry.GetRegisteredActivities()
 }
 
 // RegisterActivity registers an activity with this environment.
