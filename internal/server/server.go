@@ -49,10 +49,13 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	sem    chan struct{}
-	cons   []jetstream.ConsumeContext
-	scope  tally.Scope
-	nc     *nats.Conn
+	// mu guards stopped, so run never adds to wg while Stop waits on it.
+	mu      sync.Mutex
+	stopped bool
+	sem     chan struct{}
+	cons    []jetstream.ConsumeContext
+	scope   tally.Scope
+	nc      *nats.Conn
 }
 
 const requestTimeout = 2 * time.Minute
@@ -116,12 +119,27 @@ func (s *Server) Stop() {
 		cc.Stop()
 	}
 	s.cancel()
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
 	s.wg.Wait()
 }
 
-// run executes f in a goroutine, bounded by the concurrency limit.
+// run executes f in a goroutine, bounded by the concurrency limit. After
+// Stop it drops f: an unacked message comes back to another server, and
+// a request times out at the caller.
 func (s *Server) run(f func()) {
-	s.sem <- struct{}{}
+	select {
+	case s.sem <- struct{}{}:
+	case <-s.ctx.Done():
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		<-s.sem
+		return
+	}
 	s.wg.Go(func() {
 		defer func() { <-s.sem }()
 		f()
