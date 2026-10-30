@@ -76,6 +76,7 @@ type localActivityParams struct {
 	fn           interface{}
 	args         []interface{}
 	options      LocalActivityOptions
+	header       *api.Header
 }
 
 type childParams struct {
@@ -93,6 +94,7 @@ type childParams struct {
 	memo                *api.Memo
 	searchAttributes    *api.SearchAttributes
 	parentClosePolicy   ParentClosePolicy
+	header              *api.Header
 	// args are the caller's arguments, for test mocks.
 	args []interface{}
 }
@@ -108,6 +110,9 @@ type workflowEnvironment interface {
 	Logger() *zap.Logger
 	MetricsScope() tally.Scope
 	NextID() string
+	// ContextPropagators and StartHeader set up the root context.
+	ContextPropagators() []ContextPropagator
+	StartHeader() *api.Header
 
 	ExecuteActivity(p activityParams, cb resultHandler) string
 	RequestCancelActivity(activityID string)
@@ -176,6 +181,11 @@ func newWorkflowRun(env workflowEnvironment, fn interface{}, input []byte) *work
 	env.RegisterCancelHandler(func() { r.cancel() })
 	env.RegisterQueryHandler(r.query)
 	r.d.newCoroutine(r.root, "root", func(ctx Context) {
+		ctx, err := extractToWorkflow(ctx, env.ContextPropagators(), env.StartHeader())
+		if err != nil {
+			// A panic fails the decision task, as in Cadence.
+			panic(err.Error())
+		}
 		result, err := r.invoke(ctx, fn, input)
 		env.Complete(result, err)
 	})
@@ -356,11 +366,16 @@ func activityParamsFrom(ctx Context, env workflowEnvironment, activity interface
 	if tl == "" {
 		tl = env.WorkflowInfo().TaskListName
 	}
+	header, err := workflowHeader(ctx)
+	if err != nil {
+		return activityParams{}, err
+	}
 	id := o.ActivityID
 	if id == "" {
 		id = env.NextID()
 	}
 	return activityParams{
+		header:              header,
 		activityID:          id,
 		activityType:        env.Registry().activityName(activity),
 		taskList:            tl,
@@ -410,12 +425,18 @@ func ExecuteLocalActivity(ctx Context, activity interface{}, args ...interface{}
 		f.Set(nil, ErrCanceled)
 		return f
 	}
+	header, err := workflowHeader(ctx)
+	if err != nil {
+		f.Set(nil, err)
+		return f
+	}
 	id := env.ExecuteLocalActivity(localActivityParams{
 		activityID:   env.NextID(),
 		activityType: env.Registry().activityName(activity),
 		fn:           fn,
 		args:         args,
 		options:      o,
+		header:       header,
 	}, func(result []byte, err error) {
 		if !f.ready {
 			f.Set(bytesOrNil(result), err)
@@ -493,8 +514,13 @@ func ExecuteChildWorkflow(ctx Context, childWorkflow interface{}, args ...interf
 	if err != nil {
 		return fail(err)
 	}
+	header, err := workflowHeader(ctx)
+	if err != nil {
+		return fail(err)
+	}
 	info := env.WorkflowInfo()
 	p := childParams{
+		header:              header,
 		domain:              o.Domain,
 		workflowID:          o.WorkflowID,
 		workflowType:        env.Registry().workflowName(childWorkflow),
@@ -728,9 +754,14 @@ func NewContinueAsNewError(ctx Context, wfn interface{}, args ...interface{}) *C
 	if err != nil {
 		panic(err)
 	}
+	header, err := workflowHeader(ctx)
+	if err != nil {
+		panic(err)
+	}
 	info := env.WorkflowInfo()
 	o := childOptions(ctx)
 	p := &continueAsNewParams{
+		header:       header,
 		workflowType: env.Registry().workflowName(wfn),
 		input:        input,
 		taskList:     info.TaskListName,

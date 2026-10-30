@@ -204,6 +204,8 @@ type replayer struct {
 	logger   *zap.Logger
 	scope    tally.Scope
 	laExec   laExecutor
+	props    []ContextPropagator
+	header   *api.Header
 	run      *workflowRun
 	now      time.Time
 	replay   bool
@@ -247,6 +249,7 @@ type replayerConfig struct {
 	scope                 tally.Scope
 	enableLoggingInReplay bool
 	laExec                laExecutor
+	propagators           []ContextPropagator
 }
 
 func newReplayer(cfg replayerConfig) *replayer {
@@ -256,6 +259,7 @@ func newReplayer(cfg replayerConfig) *replayer {
 		dc:          orDefault(cfg.dataConverter),
 		scope:       cfg.scope,
 		laExec:      cfg.laExec,
+		props:       cfg.propagators,
 		acts:        map[string]*actHandle{},
 		actBySch:    map[int64]string{},
 		timers:      map[string]*timerHandle{},
@@ -545,6 +549,7 @@ func (r *replayer) startWorkflow(e *api.HistoryEvent) error {
 	info.Memo = a.Memo
 	info.SearchAttributes = a.SearchAttributes
 	info.RetryPolicy = a.RetryPolicy
+	r.header = a.Header
 	if a.CronSchedule != "" {
 		cs := a.CronSchedule
 		info.CronSchedule = &cs
@@ -852,6 +857,10 @@ func (r *replayer) DataConverter() DataConverter {
 func (r *replayer) Logger() *zap.Logger       { return r.logger }
 func (r *replayer) MetricsScope() tally.Scope { return r.scope }
 
+func (r *replayer) ContextPropagators() []ContextPropagator { return r.props }
+
+func (r *replayer) StartHeader() *api.Header { return r.header }
+
 func (r *replayer) NextID() string {
 	r.counter++
 	return strconv.FormatInt(r.counter, 10)
@@ -972,6 +981,7 @@ func (r *replayer) ExecuteChildWorkflow(p childParams, cb resultHandler, started
 			CronSchedule:                        p.cronSchedule,
 			Memo:                                p.memo,
 			SearchAttributes:                    p.searchAttributes,
+			Header:                              p.header,
 		},
 	}
 	r.addDecision(d)

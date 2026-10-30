@@ -18,6 +18,9 @@ type ClientOptions struct {
 	MetricsScope  tally.Scope
 	Identity      string
 	DataConverter DataConverter
+	// ContextPropagators write context values into the header of the
+	// workflows this client starts; see ContextPropagator.
+	ContextPropagators []ContextPropagator
 	// FeatureFlags and IsolationGroup are accepted for compatibility and
 	// ignored.
 	FeatureFlags   FeatureFlags
@@ -114,6 +117,7 @@ type workflowClient struct {
 	dc       DataConverter
 	identity string
 	scope    tally.Scope
+	props    []ContextPropagator
 }
 
 // NewClient creates a client for a domain.
@@ -130,10 +134,13 @@ func NewClient(service api.Service, domain string, options *ClientOptions) Clien
 		o.MetricsScope = tally.NoopScope
 	}
 	scope := tagged(o.MetricsScope, tagDomain, domain)
-	return &workflowClient{service: withServiceMetrics(service, scope), domain: domain, dc: orDefault(o.DataConverter), identity: o.Identity, scope: scope}
+	return &workflowClient{
+		service: withServiceMetrics(service, scope), domain: domain, dc: orDefault(o.DataConverter), identity: o.Identity, scope: scope,
+		props: o.ContextPropagators,
+	}
 }
 
-func (c *workflowClient) startRequest(options StartWorkflowOptions, workflow interface{}, args []interface{}) (*api.StartWorkflowExecutionRequest, error) {
+func (c *workflowClient) startRequest(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args []interface{}) (*api.StartWorkflowExecutionRequest, error) {
 	if options.TaskList == "" {
 		return nil, errors.New("missing TaskList")
 	}
@@ -200,6 +207,9 @@ func (c *workflowClient) startRequest(options StartWorkflowOptions, workflow int
 	if req.RequestID == "" {
 		req.RequestID = uuid.NewString()
 	}
+	if req.Header, err = injectHeader(ctx, c.props); err != nil {
+		return nil, err
+	}
 	if !options.FirstRunAt.IsZero() {
 		req.FirstRunAtTimestamp = options.FirstRunAt.UnixNano()
 	}
@@ -214,7 +224,7 @@ func (c *workflowClient) startRequest(options StartWorkflowOptions, workflow int
 
 // StartWorkflow starts a workflow and returns its execution.
 func (c *workflowClient) StartWorkflow(ctx context.Context, options StartWorkflowOptions, workflow interface{}, args ...interface{}) (*WorkflowExecution, error) {
-	req, err := c.startRequest(options, workflow, args)
+	req, err := c.startRequest(ctx, options, workflow, args)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +348,7 @@ func (c *workflowClient) SignalWorkflow(ctx context.Context, workflowID, runID, 
 func (c *workflowClient) SignalWithStartWorkflow(ctx context.Context, workflowID, signalName string, signalArg interface{},
 	options StartWorkflowOptions, workflow interface{}, workflowArgs ...interface{}) (*WorkflowExecution, error) {
 	options.ID = workflowID
-	req, err := c.startRequest(options, workflow, workflowArgs)
+	req, err := c.startRequest(ctx, options, workflow, workflowArgs)
 	if err != nil {
 		return nil, err
 	}

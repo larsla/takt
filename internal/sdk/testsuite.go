@@ -35,6 +35,8 @@ type WorkflowTestSuite struct {
 	logger   *zap.Logger
 	scope    tally.Scope
 	registry *registry
+	props    []ContextPropagator
+	header   *api.Header
 }
 
 func (s *WorkflowTestSuite) init() {
@@ -71,6 +73,14 @@ func (s *WorkflowTestSuite) GetLogger() *zap.Logger {
 	s.init()
 	return s.logger
 }
+
+// SetContextPropagators sets the context propagators of environments
+// created afterwards.
+func (s *WorkflowTestSuite) SetContextPropagators(props []ContextPropagator) { s.props = props }
+
+// SetHeader sets the header the workflows of environments created
+// afterwards start with, as if a client had injected it.
+func (s *WorkflowTestSuite) SetHeader(header *api.Header) { s.header = header }
 
 // SetMetricsScope sets the metrics scope of environments created afterwards.
 func (s *WorkflowTestSuite) SetMetricsScope(scope tally.Scope) { s.scope = scope }
@@ -133,6 +143,8 @@ type testEnv struct {
 	scope    tally.Scope
 	opts     WorkerOptions
 	clock    mockClock
+	props    []ContextPropagator
+	header   *api.Header
 
 	callbacks chan func()
 	running   int
@@ -185,6 +197,8 @@ func newTestEnv(s *WorkflowTestSuite, m *mock.Mock) *testEnv {
 		registry:  newRegistry(s.registry),
 		logger:    s.logger,
 		scope:     s.scope,
+		props:     s.props,
+		header:    s.header,
 		opts:      WorkerOptions{DataConverter: defaultConverter, BackgroundActivityContext: context.Background()},
 		clock:     mockClock{now: time.Now()},
 		callbacks: make(chan func(), 1024),
@@ -410,6 +424,7 @@ func (e *testEnv) loop() {
 type testWorkflow struct {
 	env     *testEnv
 	info    *WorkflowInfo
+	header  *api.Header
 	run     *workflowRun
 	parent  *testWorkflow
 	handle  *testChild
@@ -482,6 +497,10 @@ func (w *testWorkflow) DataConverter() DataConverter {
 func (w *testWorkflow) Logger() *zap.Logger       { return w.env.logger }
 func (w *testWorkflow) MetricsScope() tally.Scope { return w.env.scope }
 
+func (w *testWorkflow) ContextPropagators() []ContextPropagator { return w.env.props }
+
+func (w *testWorkflow) StartHeader() *api.Header { return w.header }
+
 func (w *testWorkflow) NextID() string {
 	w.counter++
 	return strconv.FormatInt(w.counter, 10)
@@ -527,6 +546,14 @@ type testActivity struct {
 	// early holds a CompleteActivity call that arrived before the activity
 	// returned ErrResultPending.
 	early func()
+}
+
+// header is the header the activity was scheduled with.
+func (a *testActivity) header() *api.Header {
+	if a.la != nil {
+		return a.la.header
+	}
+	return a.params.header
 }
 
 func (w *testWorkflow) activityInfo(id, name, taskList string, attempt int32) ActivityInfo {
@@ -629,9 +656,17 @@ func (w *testWorkflow) runActivity(a *testActivity, body func(ctx context.Contex
 	}
 	env.cancel = cancel
 	ctx = context.WithValue(ctx, activityEnvKey, env)
+	header := a.header()
 	e.running++
 	go func() {
-		result, delay, err := body(ctx)
+		var (
+			result []byte
+			delay  time.Duration
+		)
+		pctx, err := extractHeader(ctx, e.props, header)
+		if err == nil {
+			result, delay, err = body(pctx)
+		}
 		ctxErr := ctx.Err()
 		e.post(func() {
 			e.running--
@@ -884,6 +919,7 @@ func (w *testWorkflow) ExecuteChildWorkflow(p childParams, cb resultHandler, sta
 		SearchAttributes:                    p.searchAttributes,
 	}
 	child := e.newWorkflow(info, w)
+	child.header = p.header
 	child.handle = c
 	c.child = child
 	child.start(fn, p.input)

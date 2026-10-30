@@ -137,6 +137,7 @@ func (e *TestWorkflowEnvironment) ExecuteWorkflow(workflowFn interface{}, args .
 		SearchAttributes:                    impl.searchAttrs,
 	}
 	impl.root = impl.newWorkflow(info, nil)
+	impl.root.header = impl.header
 	impl.root.start(fn, input)
 	if impl.wfTimeout > 0 {
 		impl.clock.add(impl.wfTimeout, func() {
@@ -487,7 +488,11 @@ func (e *TestActivityEnvironment) execute(activityFn interface{}, isLocal bool, 
 		cancel:           cancel,
 	}
 	ctx = context.WithValue(ctx, activityEnvKey, env)
-	result, err := runActivityArgs(ctx, fn, args, impl.dc())
+	pctx, err := extractHeader(ctx, impl.props, impl.header)
+	if err != nil {
+		return nil, err
+	}
+	result, err := runActivityArgs(pctx, fn, args, impl.dc())
 	if errors.Is(err, ErrActivityResultPending) {
 		return nil, err
 	}

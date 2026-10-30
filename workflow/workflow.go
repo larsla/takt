@@ -61,6 +61,13 @@ type (
 	UnknownExternalWorkflowExecutionError = sdk.UnknownExternalWorkflowExecutionError
 	// RetryPolicy says how to retry failed activities and workflows.
 	RetryPolicy = sdk.RetryPolicy
+	// ContextPropagator carries context values across workflow and activity
+	// boundaries in headers. Set it in worker.Options and client.Options.
+	ContextPropagator = sdk.ContextPropagator
+	// HeaderReader reads header fields.
+	HeaderReader = sdk.HeaderReader
+	// HeaderWriter writes header fields.
+	HeaderWriter = sdk.HeaderWriter
 	// ParentClosePolicy says what happens to a child when its parent closes.
 	ParentClosePolicy = sdk.ParentClosePolicy
 	// WorkflowIDReusePolicy says when a workflow ID may be reused.

@@ -89,6 +89,9 @@ type WorkerOptions struct {
 	WorkflowPanicPolicy            WorkflowPanicPolicy
 	DataConverter                  DataConverter
 	WorkerStopTimeout              time.Duration
+	// ContextPropagators carry context values into workflows and activities
+	// through headers; see ContextPropagator.
+	ContextPropagators []ContextPropagator
 	// EnableSessionWorker makes Start fail: takt doesn't support sessions.
 	// MaxConcurrentSessionExecutionSize is ignored.
 	EnableSessionWorker               bool
@@ -498,6 +501,7 @@ func (w *Worker) newReplayer(exec *api.WorkflowExecution, wfType string, logger 
 		scope:                 tagged(w.scope, tagWorkflowType, wfType),
 		enableLoggingInReplay: w.opts.EnableLoggingInReplay,
 		laExec:                la,
+		propagators:           w.opts.ContextPropagators,
 	})
 }
 
@@ -707,11 +711,14 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 
 	scope := tagged(w.activityScope, tagActivityType, name)
 	var result []byte
-	var err error
 	execStart := time.Now()
-	if fn, ok := w.getActivity(name); ok {
-		result, err = runActivity(ctx, fn, task.Input, w.opts.DataConverter)
-	} else {
+	fn, ok := w.getActivity(name)
+	pctx, err := extractHeader(ctx, w.opts.ContextPropagators, task.Header)
+	switch {
+	case err != nil:
+	case ok:
+		result, err = runActivity(pctx, fn, task.Input, w.opts.DataConverter)
+	default:
 		err = fmt.Errorf("unable to find activityType=%v. Supported types: %v", name, w.activityNames())
 	}
 	ctxErr := ctx.Err()
@@ -785,6 +792,11 @@ func (w *Worker) executeLocal(ctx context.Context, info *WorkflowInfo, p localAc
 	scope := tagged(w.scope, tagWorkerType, workerTypeLocalActivity, tagActivityType, p.activityType)
 	scope.Counter(MetricLocalActivityTotal).Inc(1)
 	start := time.Now()
+	ctx, err := extractHeader(ctx, w.opts.ContextPropagators, p.header)
+	if err != nil {
+		scope.Counter(MetricLocalActivityFailed).Inc(1)
+		return laOutcome{err: err}
+	}
 	out := runLocalActivity(ctx, info, p, w.opts.DataConverter, w.logger, tagged(w.scope, tagActivityType, p.activityType), w.stopC)
 	scope.Timer(MetricLocalActivityExecutionLatency).Record(time.Since(start))
 	var (
