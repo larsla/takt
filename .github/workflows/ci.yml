@@ -18,7 +18,7 @@ env:
 
 jobs:
   check:
-    name: make check
+    name: lint and test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -27,9 +27,9 @@ jobs:
           go-version-file: go.mod
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}
-      # generate (and fail on stale generated files), lint, gosec, tests
-      # with -race and the coverage gate.
-      - run: make check
+      # lint, gosec, and tests with -race and the coverage gate. Generated
+      # files are committed and not regenerated here.
+      - run: make ci
 
   vuln:
     name: govulncheck

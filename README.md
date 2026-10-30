@@ -117,13 +117,14 @@ Pods run as non-root with a read-only root filesystem. [values.yaml](charts/takt
 
 ## Releases
 
-Pushing a tag like `v1.2.3` runs the tests, then publishes the multi-arch image to `ghcr.io/larsla/takt` (tags `1.2.3`, `1.2` and `1`), the chart to `oci://ghcr.io/larsla/charts` with chart and app version `1.2.3`, and a GitHub release with binaries. Pull requests and pushes to `main` run `make check`, govulncheck, an image build with a smoke test, and a chart install on kind.
+Pushing a tag like `v1.2.3` runs the tests, then publishes the multi-arch image to `ghcr.io/larsla/takt` (tags `1.2.3`, `1.2` and `1`), the chart to `oci://ghcr.io/larsla/charts` with chart and app version `1.2.3`, and a GitHub release with binaries. Pull requests and pushes to `main` run `make ci` (lint, gosec and tests; nothing is generated in CI), govulncheck, an image build with a smoke test, and a chart install on kind.
 
 ## Development
 
 ```sh
 make generate   # templ, Tailwind CSS, .gen/go/shared aliases (output is committed)
 make check      # generate + lint + gosec + tests with -race and the 70% coverage gate
+make ci         # lint + gosec + tests, without generating (what CI runs)
 make vuln       # govulncheck (needs network)
 ```
 

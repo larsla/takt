@@ -31,7 +31,7 @@ TW_SHA := $(TW_SHA_$(TW_OS)-$(TW_ARCH))
 # Files that `make generate` produces and that must be committed.
 GENERATED := web/static/app.css .gen/go/shared/shared.go $(shell find . -name '*_templ.go' -not -path './bin/*')
 
-.PHONY: all build generate templ css shared check-generated lint sec test cover check vuln dev docker helm-lint clean
+.PHONY: all build generate templ css shared check-generated lint sec test cover check ci vuln dev docker helm-lint clean
 
 all: check build
 
@@ -83,6 +83,10 @@ cover:
 		{ echo "coverage below $(COVER_MIN)%"; exit 1; }
 
 check: check-generated lint sec cover
+
+# What CI runs: the generated files are committed, so CI only lints and
+# tests them.
+ci: lint sec cover
 
 vuln:
 	$(GO) tool govulncheck ./...
