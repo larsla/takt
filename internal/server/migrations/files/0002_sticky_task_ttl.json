@@ -1,0 +1,16 @@
+{
+  "description": "Per-message TTLs on the task stream, for sticky task stubs",
+  "streams": [
+    {
+      "name": "TAKT_TASKS",
+      "description": "Decision and activity task stubs per task list",
+      "subjects": [
+        "takt.task.>"
+      ],
+      "retention": "workqueue",
+      "storage": "file",
+      "duplicate_window": 120000000000,
+      "allow_msg_ttl": true
+    }
+  ]
+}

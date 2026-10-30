@@ -279,6 +279,15 @@ type PollForDecisionTaskResponse struct {
 	StartedTimestamp          int64              `json:"startedTimestamp,omitempty"`
 }
 
+// ResetStickyTaskListRequest stops sending a run's decision tasks to the
+// worker that has it cached.
+type ResetStickyTaskListRequest struct {
+	Domain    string             `json:"domain"`
+	Execution *WorkflowExecution `json:"execution,omitempty"`
+}
+
+type ResetStickyTaskListResponse struct{}
+
 type StickyExecutionAttributes struct {
 	WorkerTaskList                *TaskList `json:"workerTaskList,omitempty"`
 	ScheduleToStartTimeoutSeconds int32     `json:"scheduleToStartTimeoutSeconds,omitempty"`

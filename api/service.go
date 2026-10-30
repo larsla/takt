@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Service is the workflow service the SDK talks to. It mirrors Cadence's
@@ -44,6 +45,7 @@ type Service interface {
 	CountWorkflowExecutions(ctx context.Context, req *CountWorkflowExecutionsRequest) (*CountWorkflowExecutionsResponse, error)
 	DescribeTaskList(ctx context.Context, req *DescribeTaskListRequest) (*DescribeTaskListResponse, error)
 	ListTaskLists(ctx context.Context, req *ListTaskListsRequest) (*ListTaskListsResponse, error)
+	ResetStickyTaskList(ctx context.Context, req *ResetStickyTaskListRequest) (*ResetStickyTaskListResponse, error)
 }
 
 // API method names, used as the last token of takt.api.<method>.
@@ -79,6 +81,7 @@ const (
 	MethodDescribeTaskList                 = "DescribeTaskList"
 	MethodListTaskLists                    = "ListTaskLists"
 	MethodRecordPoller                     = "RecordPoller"
+	MethodResetStickyTaskList              = "ResetStickyTaskList"
 )
 
 // Subject layout.
@@ -114,6 +117,12 @@ func kindToken(t TaskListType) string {
 func TaskSubject(domain, taskList string, t TaskListType) string {
 	return fmt.Sprintf("takt.task.%s.%s.%s", Token(domain), Token(taskList), kindToken(t))
 }
+
+// StickyTaskListPrefix starts the names of workers' sticky task lists.
+const StickyTaskListPrefix = "__sticky:"
+
+// IsStickyTaskList reports whether name is a worker's sticky task list.
+func IsStickyTaskList(name string) bool { return strings.HasPrefix(name, StickyTaskListPrefix) }
 
 // TaskConsumerName is the durable consumer that serves one task list.
 func TaskConsumerName(domain, taskList string, t TaskListType) string {

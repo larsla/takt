@@ -410,7 +410,13 @@ func (e *Engine) publish(ctx context.Context, s *State, item *OutboxItem) error 
 		data, _ := json.Marshal(st)
 		msg := nats.NewMsg(api.TaskSubject(st.Domain, item.TaskList, st.Type))
 		msg.Data = data
-		msg.Header.Set(jetstream.MsgIDHeader, fmt.Sprintf("%s-%s-%d-%d", st.RunID, st.Type, st.ScheduleID, st.Attempt))
+		id := fmt.Sprintf("%s-%s-%d-%d", st.RunID, st.Type, st.ScheduleID, st.Attempt)
+		if item.TTL > 0 {
+			// A sticky stub; the same task may go to the task list later.
+			id += "-sticky"
+			msg.Header.Set(jetstream.MsgTTLHeader, time.Duration(item.TTL).String())
+		}
+		msg.Header.Set(jetstream.MsgIDHeader, id)
 		_, err := e.js.PublishMsg(ctx, msg)
 		return err
 	case OutboxTimer:

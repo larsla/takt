@@ -151,7 +151,35 @@ func (t *tx) scheduleDecision() {
 		TaskList:      tl,
 		Timeout:       timeout,
 	}
-	t.task(api.TaskListTypeDecision, tl, ev.EventID, s.DecisionAttempt)
+	if s.StickyTaskList == "" {
+		t.task(api.TaskListTypeDecision, tl, ev.EventID, s.DecisionAttempt)
+		return
+	}
+	s.Decision.Sticky = true
+	wait := seconds(max(s.StickyTimeout, 1))
+	t.task(api.TaskListTypeDecision, s.StickyTaskList, ev.EventID, s.DecisionAttempt)
+	t.outbox[len(t.outbox)-1].TTL = wait + stickyTTLMargin
+	t.timer(TimerStickyTimeout, ev.EventID, s.DecisionAttempt, api.TimeoutTypeScheduleToStart, t.now+wait,
+		fmt.Sprintf("ds-%d-%d", ev.EventID, s.DecisionAttempt))
+}
+
+// stickyTTLMargin keeps a sticky task stub around a little longer than the
+// sticky timeout, which moves the task when nobody took it.
+const stickyTTLMargin = int64(30 * time.Second)
+
+// unstick sends a decision task waiting on the sticky task list to the
+// run's task list, and stops using the sticky task list.
+func (t *tx) unstick() {
+	s := t.s
+	if s.StickyTaskList == "" && (s.Decision == nil || !s.Decision.Sticky) {
+		return
+	}
+	s.StickyTaskList, s.StickyTimeout = "", 0
+	t.changed = true
+	if d := s.Decision; d != nil && d.Sticky && d.StartedID == 0 {
+		d.Sticky = false
+		t.task(api.TaskListTypeDecision, d.TaskList, d.ScheduleID, d.Attempt)
+	}
 }
 
 // retryDecision schedules the next decision attempt after a failure,

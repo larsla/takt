@@ -132,6 +132,11 @@ func (t *tx) completeDecision(d *DecisionInfo, req *api.RespondDecisionTaskCompl
 	s.Decision = nil
 	s.DecisionAttempt = 0
 	s.LastDecisionStartedID = d.StartedID
+	if sa := req.StickyAttributes; sa != nil && sa.WorkerTaskList != nil && sa.WorkerTaskList.Name != "" {
+		s.StickyTaskList, s.StickyTimeout = sa.WorkerTaskList.Name, sa.ScheduleToStartTimeoutSeconds
+	} else {
+		s.StickyTaskList, s.StickyTimeout = "", 0
+	}
 
 	need := req.ForceCreateNewDecisionTask
 	for _, dec := range req.Decisions {
@@ -178,6 +183,8 @@ func (e *Engine) RespondDecisionTaskFailed(ctx context.Context, req *api.Respond
 }
 
 func (t *tx) failDecision(d *DecisionInfo, cause api.DecisionTaskFailedCause, details []byte, identity string) {
+	// The worker's cached copy of the run is no good any more.
+	t.s.StickyTaskList, t.s.StickyTimeout = "", 0
 	ev := t.event(api.EventTypeDecisionTaskFailed)
 	ev.DecisionTaskFailedEventAttributes = &api.DecisionTaskFailedEventAttributes{
 		ScheduledEventID: d.ScheduleID,
@@ -193,6 +200,8 @@ func (t *tx) failDecision(d *DecisionInfo, cause api.DecisionTaskFailedCause, de
 }
 
 func (t *tx) timeoutDecision(d *DecisionInfo) {
+	// The worker that had the run cached didn't answer.
+	t.s.StickyTaskList, t.s.StickyTimeout = "", 0
 	ev := t.event(api.EventTypeDecisionTaskTimedOut)
 	ev.DecisionTaskTimedOutEventAttributes = &api.DecisionTaskTimedOutEventAttributes{
 		ScheduledEventID: d.ScheduleID,
@@ -663,4 +672,34 @@ func (t *tx) continueAsNew(a *api.ContinueAsNewWorkflowExecutionDecisionAttribut
 	s.Continue = a
 	t.closeRun(api.CloseStatusContinuedAsNew, ev.EventID)
 	t.continued = true
+}
+
+// ResetStickyTaskList stops sending the run's decision tasks to the
+// worker that has it cached. A worker calls it when it drops the run from
+// its cache or stops.
+func (e *Engine) ResetStickyTaskList(ctx context.Context, req *api.ResetStickyTaskListRequest) (*api.ResetStickyTaskListResponse, error) {
+	if req.Execution == nil || req.Execution.WorkflowID == "" {
+		return nil, badRequest("execution is not set")
+	}
+	runID := req.Execution.RunID
+	if runID == "" {
+		cur, _, err := e.current(ctx, req.Domain, req.Execution.WorkflowID)
+		if err != nil {
+			return nil, err
+		}
+		if cur == nil {
+			return nil, &api.EntityNotExistsError{Message: "workflow execution not found"}
+		}
+		runID = cur.RunID
+	}
+	_, err := e.update(ctx, req.Domain, req.Execution.WorkflowID, runID, func(t *tx) error {
+		if t.s.Running() {
+			t.unstick()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &api.ResetStickyTaskListResponse{}, nil
 }

@@ -130,7 +130,7 @@ func TestPages(t *testing.T) {
 	f.get(base+"/tasklists", "web-tl")
 	f.get("/partials"+base+"/tasklists", `id="tasklists"`)
 	f.get(base+"/tasklists/decision/web-tl", "Pollers")
-	f.get("/cluster", "TAKT_HISTORY", "schema v1")
+	f.get("/cluster", "TAKT_HISTORY", "schema v2")
 	f.get("/partials/overview", "TAKT_TIMERS")
 
 	done := f.get(base+"/workflow?id=wf-done", "wf-done", "WorkflowExecutionCompleted", "hello done now", "Result", "Input")

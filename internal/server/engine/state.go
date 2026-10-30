@@ -44,6 +44,12 @@ type State struct {
 	DecisionAttempt int64         `json:"decisionAttempt,omitempty"`
 	// LastDecisionStartedID is the started event of the last completed decision.
 	LastDecisionStartedID int64 `json:"lastDecisionStartedId,omitempty"`
+	// StickyTaskList is the task list of the worker that has the run
+	// cached, set by its last completed decision task. Decision tasks go
+	// there first and move back to the run's task list after
+	// StickyTimeout seconds.
+	StickyTaskList string `json:"stickyTaskList,omitempty"`
+	StickyTimeout  int32  `json:"stickyTimeout,omitempty"`
 	// Buffered events arrived while a decision was running. They get IDs when
 	// the decision finishes.
 	Buffered []*api.HistoryEvent `json:"buffered,omitempty"`
@@ -89,6 +95,8 @@ type DecisionInfo struct {
 	RequestID     string `json:"requestId,omitempty"`
 	TaskList      string `json:"taskList"`
 	Timeout       int32  `json:"timeout"`
+	// Sticky is set while the task waits on the run's sticky task list.
+	Sticky bool `json:"sticky,omitempty"`
 }
 
 type ActivityInfo struct {
@@ -172,8 +180,11 @@ type OutboxItem struct {
 	Kind     OutboxKind    `json:"kind"`
 	Stub     *api.TaskStub `json:"stub,omitempty"`
 	TaskList string        `json:"taskList,omitempty"`
-	Timer    *TimerTask    `json:"timer,omitempty"`
-	Transfer *Transfer     `json:"transfer,omitempty"`
+	// TTL, in nanoseconds, removes a sticky task stub that nobody took, so
+	// a gone worker's sticky task list empties itself.
+	TTL      int64      `json:"ttl,omitempty"`
+	Timer    *TimerTask `json:"timer,omitempty"`
+	Transfer *Transfer  `json:"transfer,omitempty"`
 }
 
 // TimerKind says what a fired timer means.
@@ -187,6 +198,9 @@ const (
 	TimerDecisionBackoff TimerKind = "decisionBackoff"
 	TimerWorkflowTimeout TimerKind = "workflowTimeout"
 	TimerWorkflowBackoff TimerKind = "workflowBackoff"
+	// TimerStickyTimeout moves a decision task that no worker took from the
+	// run's sticky task list back to its task list.
+	TimerStickyTimeout TimerKind = "stickyTimeout"
 )
 
 type TimerTask struct {

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber-go/tally"
 	"go.uber.org/zap"
@@ -81,8 +82,9 @@ type WorkerOptions struct {
 	DisableWorkflowWorker          bool
 	DisableActivityWorker          bool
 	// DisableStickyExecution turns off the in-memory cache of workflow runs
-	// (see SetStickyWorkflowCacheSize). StickyScheduleToStartTimeout is
-	// accepted for compatibility and ignored.
+	// (see SetStickyWorkflowCacheSize) and the worker's sticky task list.
+	// StickyScheduleToStartTimeout is how long a decision task waits on the
+	// sticky task list before it goes to any worker; it defaults to 5s.
 	DisableStickyExecution         bool
 	StickyScheduleToStartTimeout   time.Duration
 	BackgroundActivityContext      context.Context
@@ -214,6 +216,10 @@ type Worker struct {
 	laLimit   *rate.Limiter
 	queryStop func()
 	cache     *stickyCache
+	// stickyTaskList is the task list only this worker polls, where the
+	// server sends decision tasks of runs it has cached. Empty when sticky
+	// execution is off.
+	stickyTaskList string
 	// props are the context propagators, the tracing one included.
 	props []ContextPropagator
 	// raw is the service as given; service records metrics around it.
@@ -249,8 +255,49 @@ func NewWorker(service api.Service, domain, taskList string, options WorkerOptio
 	if !options.DisableStickyExecution {
 		w.cache = newStickyCache(int(stickyCacheSize.Load()))
 		w.cache.scope = w.decisionScope
+		w.cache.onEvict = func(es []*stickyEntry) { go w.resetSticky(es, 10*time.Second) }
+		w.stickyTaskList = api.StickyTaskListPrefix + options.Identity + ":" + uuid.NewString()
 	}
 	return w
+}
+
+// resetSticky tells the server to stop sending the decision tasks of runs
+// this worker dropped from its cache to its sticky task list, so they
+// don't wait for the sticky timeout.
+func (w *Worker) resetSticky(entries []*stickyEntry, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		if e.exec == nil {
+			continue
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			_, err := w.service.ResetStickyTaskList(ctx, &api.ResetStickyTaskListRequest{Domain: w.domain, Execution: e.exec})
+			var nf *api.EntityNotExistsError
+			if err != nil && !errors.As(err, &nf) && ctx.Err() == nil {
+				w.logger.Debug("failed to reset sticky task list", zap.String("WorkflowID", e.exec.WorkflowID), zap.Error(err))
+			}
+		})
+	}
+	wg.Wait()
+}
+
+// decisionPollers splits n decision pollers between the task list and
+// the worker's sticky task list.
+func decisionPollers(n int, sticky bool) (normal, onSticky int) {
+	if !sticky {
+		return n, 0
+	}
+	onSticky = max(1, n/2)
+	return max(1, n-onSticky), onSticky
 }
 
 func limiter(perSecond float64) *rate.Limiter {
@@ -283,9 +330,16 @@ func (w *Worker) Start() error {
 		sem := make(chan struct{}, w.opts.MaxConcurrentDecisionTaskExecutionSize)
 		lim := limiter(w.opts.WorkerDecisionTasksPerSecond)
 		w.decisionScope.Counter(MetricWorkerStart).Inc(1)
-		for range w.opts.MaxConcurrentDecisionTaskPollers {
+		normal, sticky := decisionPollers(w.opts.MaxConcurrentDecisionTaskPollers, w.stickyTaskList != "")
+		for range normal {
 			w.decisionScope.Counter(MetricPollerStart).Inc(1)
-			w.wg.Go(func() { w.pollLoop(sem, w.pollDecision, lim) })
+			tl := &api.TaskList{Name: w.taskList, Kind: api.TaskListKindNormal}
+			w.wg.Go(func() { w.pollLoop(sem, func() (func(), error) { return w.pollDecision(tl) }, lim) })
+		}
+		for range sticky {
+			w.decisionScope.Counter(MetricPollerStart).Inc(1)
+			tl := &api.TaskList{Name: w.stickyTaskList, Kind: api.TaskListKindSticky}
+			w.wg.Go(func() { w.pollLoop(sem, func() (func(), error) { return w.pollDecision(tl) }, lim) })
 		}
 		if l, ok := w.raw.(queryListener); ok {
 			stop, err := l.ListenQueries(w.domain, w.taskList, w.handleQuery)
@@ -349,7 +403,8 @@ func (w *Worker) Stop() {
 	case <-time.After(w.opts.WorkerStopTimeout):
 		w.logger.Warn("worker stop timed out with tasks still running")
 	}
-	w.cache.clear()
+	// Hand the cached runs back to the task list right away.
+	w.resetSticky(w.cache.clear(), 5*time.Second)
 	w.logger.Info("Stopped Worker")
 }
 
@@ -419,10 +474,10 @@ func (w *Worker) pollLoop(sem chan struct{}, poll func() (func(), error), limite
 	}
 }
 
-func (w *Worker) pollDecision() (func(), error) {
+func (w *Worker) pollDecision(tl *api.TaskList) (func(), error) {
 	start := time.Now()
 	task, err := w.service.PollForDecisionTask(w.ctx, &api.PollForDecisionTaskRequest{
-		Domain: w.domain, TaskList: &api.TaskList{Name: w.taskList}, Identity: w.opts.Identity,
+		Domain: w.domain, TaskList: tl, Identity: w.opts.Identity,
 	})
 	gotTask := err == nil && len(task.TaskToken) > 0
 	if w.ctx.Err() == nil {
@@ -546,10 +601,24 @@ func (w *Worker) handleDecision(task *api.PollForDecisionTaskResponse) {
 		w.decisionFailed(ctx, logger, scope, task, err)
 		return
 	}
+	req := &api.RespondDecisionTaskCompletedRequest{TaskToken: task.TaskToken, Decisions: decisions, Identity: w.opts.Identity}
+	// Cache the run before answering: once the server has the answer, the
+	// run's next decision task can reach this worker's sticky task list.
+	var entry *stickyEntry
+	if w.cache != nil && !r.completed {
+		entry = &stickyEntry{runID: exec.RunID, exec: exec, r: r, consumed: len(events), lastStarted: task.StartedEventID, sent: decisions}
+		w.cache.put(entry)
+		req.StickyAttributes = &api.StickyExecutionAttributes{
+			WorkerTaskList:                &api.TaskList{Name: w.stickyTaskList, Kind: api.TaskListKindSticky},
+			ScheduleToStartTimeoutSeconds: durationSeconds(w.opts.StickyScheduleToStartTimeout),
+		}
+	}
 	start = time.Now()
-	_, err = w.service.RespondDecisionTaskCompleted(ctx, &api.RespondDecisionTaskCompletedRequest{
-		TaskToken: task.TaskToken, Decisions: decisions, Identity: w.opts.Identity,
-	})
+	// Stopping the worker doesn't cancel the answer: Stop waits for it and
+	// then hands the cached runs back, which must come after it.
+	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer rcancel()
+	_, err = w.service.RespondDecisionTaskCompleted(rctx, req)
 	scope.Timer(MetricDecisionResponseLatency).Record(time.Since(start))
 	if err == nil {
 		scope.Counter(MetricDecisionTaskCompleted).Inc(1)
@@ -560,14 +629,18 @@ func (w *Worker) handleDecision(task *api.PollForDecisionTaskResponse) {
 	} else {
 		scope.Counter(MetricDecisionResponseFailed).Inc(1)
 	}
-	if err != nil || r.completed {
-		r.close()
-		if err != nil {
-			logger.Warn("failed to complete decision task", zap.Error(err))
-		}
-		return
+	if err != nil {
+		logger.Warn("failed to complete decision task", zap.Error(err))
 	}
-	w.cache.put(&stickyEntry{runID: exec.RunID, r: r, consumed: len(events), lastStarted: task.StartedEventID, sent: decisions})
+	switch {
+	case entry == nil:
+		r.close()
+	case err != nil:
+		// The server may have taken the answer anyway.
+		if w.cache.drop(entry) {
+			w.resetSticky([]*stickyEntry{entry}, 5*time.Second)
+		}
+	}
 }
 
 // runDecisionTask continues the cached replayer of the run when the

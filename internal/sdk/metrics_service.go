@@ -212,6 +212,13 @@ func (s *metricsService) DescribeTaskList(ctx context.Context, req *api.Describe
 	return resp, err
 }
 
+func (s *metricsService) ResetStickyTaskList(ctx context.Context, req *api.ResetStickyTaskListRequest) (*api.ResetStickyTaskListResponse, error) {
+	op := s.op("ResetStickyTaskList")
+	resp, err := s.Service.ResetStickyTaskList(ctx, req)
+	op.done(err)
+	return resp, err
+}
+
 func (s *metricsService) ListTaskLists(ctx context.Context, req *api.ListTaskListsRequest) (*api.ListTaskListsResponse, error) {
 	op := s.op("ListTaskLists")
 	resp, err := s.Service.ListTaskLists(ctx, req)

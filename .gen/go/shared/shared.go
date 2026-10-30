@@ -111,6 +111,8 @@ type (
 	RequestCancelExternalWorkflowExecutionFailedEventAttributes    = api.RequestCancelExternalWorkflowExecutionFailedEventAttributes
 	RequestCancelExternalWorkflowExecutionInitiatedEventAttributes = api.RequestCancelExternalWorkflowExecutionInitiatedEventAttributes
 	RequestCancelWorkflowExecutionRequest                          = api.RequestCancelWorkflowExecutionRequest
+	ResetStickyTaskListRequest                                     = api.ResetStickyTaskListRequest
+	ResetStickyTaskListResponse                                    = api.ResetStickyTaskListResponse
 	RespondActivityTaskCanceledByIDRequest                         = api.RespondActivityTaskCanceledByIDRequest
 	RespondActivityTaskCanceledRequest                             = api.RespondActivityTaskCanceledRequest
 	RespondActivityTaskCompletedByIDRequest                        = api.RespondActivityTaskCompletedByIDRequest

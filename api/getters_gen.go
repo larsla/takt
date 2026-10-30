@@ -6019,6 +6019,32 @@ func (v *RequestCancelWorkflowExecutionRequest) IsSetCause() bool {
 }
 
 // GetDomain returns v.Domain, or its zero value when v is nil.
+func (v *ResetStickyTaskListRequest) GetDomain() (o string) {
+	if v != nil {
+		o = v.Domain
+	}
+	return
+}
+
+// IsSetDomain reports whether v.Domain is set to a non-zero value.
+func (v *ResetStickyTaskListRequest) IsSetDomain() bool {
+	return v != nil && v.Domain != ""
+}
+
+// GetExecution returns v.Execution, or its zero value when v is nil.
+func (v *ResetStickyTaskListRequest) GetExecution() (o *WorkflowExecution) {
+	if v != nil {
+		o = v.Execution
+	}
+	return
+}
+
+// IsSetExecution reports whether v.Execution is set to a non-zero value.
+func (v *ResetStickyTaskListRequest) IsSetExecution() bool {
+	return v != nil && v.Execution != nil
+}
+
+// GetDomain returns v.Domain, or its zero value when v is nil.
 func (v *RespondActivityTaskCanceledByIDRequest) GetDomain() (o string) {
 	if v != nil {
 		o = v.Domain

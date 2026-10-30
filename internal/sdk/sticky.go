@@ -12,8 +12,11 @@ import (
 
 // A worker keeps the replayer of each workflow run it handled, with its
 // goroutines parked, so the next decision task for that run only processes
-// new events instead of replaying the whole history. takt has no sticky
-// task lists: a task that reaches another worker is replayed in full there.
+// new events instead of replaying the whole history. The worker also polls
+// its own sticky task list and tells the server about it when it completes
+// a decision task, so the run's next decision task comes back to it. A
+// task that reaches another worker anyway (after the sticky timeout) is
+// replayed in full there.
 
 var stickyCacheSize atomic.Int64
 
@@ -25,6 +28,7 @@ func SetStickyWorkflowCacheSize(cacheSize int) { stickyCacheSize.Store(int64(cac
 
 type stickyEntry struct {
 	runID       string
+	exec        *api.WorkflowExecution
 	r           *replayer
 	consumed    int   // events of the history the replayer has seen
 	lastStarted int64 // started event ID of the decision task it answered
@@ -37,6 +41,9 @@ type stickyCache struct {
 	order *list.List
 	byRun map[string]*list.Element
 	scope tally.Scope
+	// onEvict is called, outside the lock, with entries dropped to make
+	// room.
+	onEvict func([]*stickyEntry)
 }
 
 func newStickyCache(size int) *stickyCache {
@@ -100,11 +107,34 @@ func (c *stickyCache) put(e *stickyEntry) {
 	for _, ev := range evicted {
 		ev.r.close()
 	}
+	if len(evicted) > 0 && c.onEvict != nil {
+		c.onEvict(evicted)
+	}
 }
 
-func (c *stickyCache) clear() {
+// drop removes e if it is still cached, and closes it. It reports whether
+// it did; another decision task may have taken e meanwhile.
+func (c *stickyCache) drop(e *stickyEntry) bool {
 	if c == nil {
-		return
+		return false
+	}
+	c.mu.Lock()
+	el, ok := c.byRun[e.runID]
+	if !ok || el.Value.(*stickyEntry) != e {
+		c.mu.Unlock()
+		return false
+	}
+	c.order.Remove(el)
+	delete(c.byRun, e.runID)
+	c.mu.Unlock()
+	e.r.close()
+	return true
+}
+
+// clear empties the cache and returns what it held.
+func (c *stickyCache) clear() []*stickyEntry {
+	if c == nil {
+		return nil
 	}
 	c.mu.Lock()
 	entries := make([]*stickyEntry, 0, len(c.byRun))
@@ -117,6 +147,7 @@ func (c *stickyCache) clear() {
 	for _, e := range entries {
 		e.r.close()
 	}
+	return entries
 }
 
 func (c *stickyCache) len() int {

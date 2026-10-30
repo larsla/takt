@@ -159,3 +159,105 @@ func TestReplicasAndWorkers(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestStickyTaskList checks that with two workers on a task list, each
+// run's decision tasks stay with the worker that has it cached.
+func TestStickyTaskList(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	register := func(w *Worker) {
+		w.RegisterWorkflow(longWorkflow)
+		w.RegisterActivity(greet)
+	}
+	w1 := e.worker(WorkerOptions{Identity: "w1"}, register)
+	w2 := e.worker(WorkerOptions{Identity: "w2"}, register)
+	const n = 4
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			if got := runLong(t, e, fmt.Sprintf("sticky-%d", i), 8); !strings.HasPrefix(got, "Hello 0!") {
+				t.Errorf("workflow %d: %q", i, got)
+			}
+		})
+	}
+	wg.Wait()
+	// One full replay per run: its first decision task.
+	if replays := w1.fullReplays.Load() + w2.fullReplays.Load(); replays != n {
+		t.Fatalf("%d full replays for %d runs", replays, n)
+	}
+}
+
+func waitForSignalWorkflow(ctx Context) (string, error) {
+	var s string
+	GetSignalChannel(ctx, "go").Receive(ctx, &s)
+	return s, nil
+}
+
+// startOnWorker runs the first decision task of a waitForSignalWorkflow on
+// its own worker, so the run is sticky to it.
+func startOnWorker(t *testing.T, e *stackEnv, id string, opts WorkerOptions) *Worker {
+	t.Helper()
+	w := NewWorker(e.stack.Client, servertest.Domain, "sticky-"+id, opts)
+	w.RegisterWorkflow(waitForSignalWorkflow)
+	if err := w.Start(); err != nil {
+		t.Fatal(err)
+	}
+	o := e.options(id)
+	o.TaskList = "sticky-" + id
+	if _, err := e.client.StartWorkflow(e.ctx, o, waitForSignalWorkflow); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for w.cache.len() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("first decision task did not run")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return w
+}
+
+func finishOnOtherWorker(t *testing.T, e *stackEnv, id string) time.Duration {
+	t.Helper()
+	other := NewWorker(e.stack.Client, servertest.Domain, "sticky-"+id, WorkerOptions{Identity: "other"})
+	other.RegisterWorkflow(waitForSignalWorkflow)
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer other.Stop()
+	start := time.Now()
+	if err := e.client.SignalWorkflow(e.ctx, id, "", "go", "done"); err != nil {
+		t.Fatal(err)
+	}
+	var result string
+	if err := e.client.GetWorkflow(e.ctx, id, "").Get(e.ctx, &result); err != nil || result != "done" {
+		t.Fatalf("result %q, err %v", result, err)
+	}
+	return time.Since(start)
+}
+
+// TestStickyTimeout checks that a decision task waiting for a worker that
+// went away moves to the task list after StickyScheduleToStartTimeout.
+func TestStickyTimeout(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	w := startOnWorker(t, e, "gone", WorkerOptions{Identity: "gone", StickyScheduleToStartTimeout: time.Second})
+	// Stop polling without telling the server, like a crashed worker.
+	w.cancel()
+	w.wg.Wait()
+	if took := finishOnOtherWorker(t, e, "gone"); took < time.Second {
+		t.Fatalf("finished after %v, before the sticky timeout", took)
+	}
+}
+
+// TestStickyResetOnStop checks that a stopping worker hands its runs back
+// right away instead of letting them wait for the sticky timeout.
+func TestStickyResetOnStop(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	w := startOnWorker(t, e, "stopped", WorkerOptions{Identity: "stopped", StickyScheduleToStartTimeout: time.Minute})
+	w.Stop()
+	if took := finishOnOtherWorker(t, e, "stopped"); took > 20*time.Second {
+		t.Fatalf("finished after %v", took)
+	}
+}

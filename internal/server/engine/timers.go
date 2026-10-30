@@ -67,6 +67,13 @@ func (t *tx) fireTimer(tt *TimerTask) {
 		}
 		t.timeoutDecision(d)
 
+	case TimerStickyTimeout:
+		d := s.Decision
+		if d == nil || d.ScheduleID != tt.EventID || d.Attempt != tt.Attempt || !d.Sticky || d.StartedID != 0 {
+			return
+		}
+		t.unstick()
+
 	case TimerDecisionBackoff:
 		if s.DecisionAttempt == tt.Attempt {
 			t.scheduleDecision()

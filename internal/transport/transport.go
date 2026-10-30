@@ -226,6 +226,11 @@ func (c *Client) DescribeTaskList(ctx context.Context, req *api.DescribeTaskList
 	return resp, c.call(ctx, api.MethodDescribeTaskList, req, resp)
 }
 
+func (c *Client) ResetStickyTaskList(ctx context.Context, req *api.ResetStickyTaskListRequest) (*api.ResetStickyTaskListResponse, error) {
+	resp := &api.ResetStickyTaskListResponse{}
+	return resp, c.call(ctx, api.MethodResetStickyTaskList, req, resp)
+}
+
 func (c *Client) ListTaskLists(ctx context.Context, req *api.ListTaskListsRequest) (*api.ListTaskListsResponse, error) {
 	resp := &api.ListTaskListsResponse{}
 	return resp, c.call(ctx, api.MethodListTaskLists, req, resp)
@@ -238,7 +243,8 @@ func (c *Client) PollForDecisionTask(ctx context.Context, req *api.PollForDecisi
 		return nil, &api.BadRequestError{Message: "task list is not set"}
 	}
 	resp := &api.PollForDecisionTaskResponse{}
-	found, err := c.poll(ctx, req.Domain, req.TaskList.Name, api.TaskListTypeDecision, req.Identity, func(stub api.TaskStub) error {
+	sticky := req.TaskList.Kind == api.TaskListKindSticky
+	found, err := c.poll(ctx, req.Domain, req.TaskList.Name, api.TaskListTypeDecision, req.Identity, sticky, func(stub api.TaskStub) error {
 		r := &api.RecordDecisionTaskStartedRequest{Stub: stub, Identity: req.Identity, RequestID: uuid.NewString()}
 		return c.call(ctx, api.MethodRecordDecisionTaskStarted, r, resp)
 	})
@@ -253,7 +259,7 @@ func (c *Client) PollForActivityTask(ctx context.Context, req *api.PollForActivi
 		return nil, &api.BadRequestError{Message: "task list is not set"}
 	}
 	resp := &api.PollForActivityTaskResponse{}
-	found, err := c.poll(ctx, req.Domain, req.TaskList.Name, api.TaskListTypeActivity, req.Identity, func(stub api.TaskStub) error {
+	found, err := c.poll(ctx, req.Domain, req.TaskList.Name, api.TaskListTypeActivity, req.Identity, false, func(stub api.TaskStub) error {
 		r := &api.RecordActivityTaskStartedRequest{Stub: stub, Identity: req.Identity, RequestID: uuid.NewString()}
 		return c.call(ctx, api.MethodRecordActivityTaskStarted, r, resp)
 	})
@@ -264,10 +270,13 @@ func (c *Client) PollForActivityTask(ctx context.Context, req *api.PollForActivi
 }
 
 // poll fetches stubs until start accepts one, the poll times out or ctx ends.
-// Stubs the server rejects as stale are acked and dropped.
-func (c *Client) poll(ctx context.Context, domain, taskList string, t api.TaskListType, identity string, start func(api.TaskStub) error) (bool, error) {
-	c.recordPoller(ctx, domain, taskList, t, identity)
-	cons, err := c.consumer(ctx, domain, taskList, t)
+// Stubs the server rejects as stale are acked and dropped. A sticky task
+// list belongs to one worker, so its pollers are not recorded.
+func (c *Client) poll(ctx context.Context, domain, taskList string, t api.TaskListType, identity string, sticky bool, start func(api.TaskStub) error) (bool, error) {
+	if !sticky {
+		c.recordPoller(ctx, domain, taskList, t, identity)
+	}
+	cons, err := c.consumer(ctx, domain, taskList, t, sticky)
 	if err != nil {
 		return false, err
 	}
@@ -307,7 +316,12 @@ func (c *Client) poll(ctx context.Context, domain, taskList string, t api.TaskLi
 	return false, ctx.Err()
 }
 
-func (c *Client) consumer(ctx context.Context, domain, taskList string, t api.TaskListType) (jetstream.Consumer, error) {
+// stickyInactive is how long the consumer of a sticky task list outlives
+// its last poll. Its stubs expire on their own (see the engine's
+// stickyTTLMargin).
+const stickyInactive = time.Minute
+
+func (c *Client) consumer(ctx context.Context, domain, taskList string, t api.TaskListType, sticky bool) (jetstream.Consumer, error) {
 	name := api.TaskConsumerName(domain, taskList, t)
 	c.mu.Lock()
 	cons := c.consumers[name]
@@ -315,13 +329,17 @@ func (c *Client) consumer(ctx context.Context, domain, taskList string, t api.Ta
 	if cons != nil {
 		return cons, nil
 	}
+	inactive := 24 * time.Hour
+	if sticky {
+		inactive = stickyInactive
+	}
 	cons, err := c.js.CreateOrUpdateConsumer(ctx, api.TaskStream, jetstream.ConsumerConfig{
 		Durable:           name,
 		FilterSubject:     api.TaskSubject(domain, taskList, t),
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		AckWait:           30 * time.Second,
 		MaxDeliver:        -1,
-		InactiveThreshold: 24 * time.Hour,
+		InactiveThreshold: inactive,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("task list consumer: %w", err)

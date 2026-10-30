@@ -32,6 +32,7 @@ var timerOperations = map[TimerKind]string{
 	TimerActivityTimeout: "TimerActiveTaskActivityTimeout",
 	TimerActivityRetry:   "TimerActiveTaskActivityRetryTimer",
 	TimerDecisionTimeout: "TimerActiveTaskDecisionTimeout",
+	TimerStickyTimeout:   "TimerActiveTaskDecisionTimeout",
 	TimerDecisionBackoff: "TimerActiveTaskDecisionBackoffTimer",
 	TimerWorkflowTimeout: "TimerActiveTaskWorkflowTimeout",
 	TimerWorkflowBackoff: "TimerActiveTaskWorkflowBackoffTimer",

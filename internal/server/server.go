@@ -220,6 +220,7 @@ func (s *Server) startService(nc *nats.Conn) error {
 		api.MethodDescribeTaskList:                 handle(s, e.DescribeTaskList),
 		api.MethodListTaskLists:                    handle(s, e.ListTaskLists),
 		api.MethodRecordPoller:                     handleVoid(s, e.RecordPoller),
+		api.MethodResetStickyTaskList:              handle(s, e.ResetStickyTaskList),
 	}
 	for name, h := range endpoints {
 		if err := g.AddEndpoint(name, h); err != nil {

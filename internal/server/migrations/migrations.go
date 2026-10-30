@@ -148,6 +148,9 @@ func applyOne(ctx context.Context, js jetstream.JetStream, m Migration, opts Opt
 	for _, cfg := range m.Streams {
 		if opts.Replicas > 0 {
 			cfg.Replicas = opts.Replicas
+		} else if st, err := js.Stream(ctx, cfg.Name); err == nil {
+			// A later migration updating a stream keeps its replica count.
+			cfg.Replicas = st.CachedInfo().Config.Replicas
 		}
 		if _, err := js.CreateOrUpdateStream(ctx, cfg); err != nil {
 			return fmt.Errorf("stream %s: %w", cfg.Name, err)
