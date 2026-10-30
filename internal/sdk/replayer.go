@@ -208,6 +208,7 @@ type replayer struct {
 	props    []ContextPropagator
 	header   *api.Header
 	tracer   opentracing.Tracer
+	icpt     []WorkflowInterceptorFactory
 	run      *workflowRun
 	now      time.Time
 	replay   bool
@@ -253,6 +254,7 @@ type replayerConfig struct {
 	laExec                laExecutor
 	propagators           []ContextPropagator
 	tracer                opentracing.Tracer
+	interceptors          []WorkflowInterceptorFactory
 }
 
 func newReplayer(cfg replayerConfig) *replayer {
@@ -264,6 +266,7 @@ func newReplayer(cfg replayerConfig) *replayer {
 		laExec:      cfg.laExec,
 		props:       cfg.propagators,
 		tracer:      cfg.tracer,
+		icpt:        cfg.interceptors,
 		acts:        map[string]*actHandle{},
 		actBySch:    map[int64]string{},
 		timers:      map[string]*timerHandle{},
@@ -867,6 +870,8 @@ func (r *replayer) StartHeader() *api.Header { return r.header }
 
 func (r *replayer) Tracer() opentracing.Tracer { return r.tracer }
 
+func (r *replayer) WorkflowInterceptors() []WorkflowInterceptorFactory { return r.icpt }
+
 func (r *replayer) NextID() string {
 	r.counter++
 	return strconv.FormatInt(r.counter, 10)
@@ -1112,14 +1117,14 @@ func compareMutable(old Value, v interface{}, equals func(a, b interface{}) bool
 	return equals(derefPtr(ptr), v)
 }
 
-func (r *replayer) GetVersion(changeID string, minSupported, maxSupported Version) Version {
+func (r *replayer) GetVersion(changeID string, minSupported, maxSupported Version, cfg getVersionConfig) Version {
 	if v, ok := r.versions[changeID]; ok {
 		validateVersion(changeID, v, minSupported, maxSupported)
 		return v
 	}
-	v := DefaultVersion
-	if !r.replay {
-		v = maxSupported
+	v := cfg.firstVersion(r.replay, minSupported, maxSupported)
+	// DefaultVersion needs no marker: replay without one returns it too.
+	if !r.replay && v != DefaultVersion {
 		details, _ := defaultConverter.ToData(changeID, v)
 		r.addDecision(&api.Decision{
 			DecisionType:                   api.DecisionTypeRecordMarker,

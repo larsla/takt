@@ -93,6 +93,9 @@ type WorkerOptions struct {
 	// ContextPropagators carry context values into workflows and activities
 	// through headers; see ContextPropagator.
 	ContextPropagators []ContextPropagator
+	// WorkflowInterceptorChainFactories build an interceptor chain for each
+	// workflow run; the first factory's interceptor is called first.
+	WorkflowInterceptorChainFactories []WorkflowInterceptorFactory
 	// Tracer, when set, records takt-ExecuteWorkflow, takt-ExecuteActivity
 	// and takt-ExecuteLocalActivity spans and carries span contexts in
 	// headers.
@@ -511,6 +514,7 @@ func (w *Worker) newReplayer(exec *api.WorkflowExecution, wfType string, logger 
 		laExec:                la,
 		propagators:           w.props,
 		tracer:                w.opts.Tracer,
+		interceptors:          w.opts.WorkflowInterceptorChainFactories,
 	})
 }
 

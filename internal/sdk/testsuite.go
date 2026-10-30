@@ -504,6 +504,10 @@ func (w *testWorkflow) StartHeader() *api.Header { return w.header }
 
 func (w *testWorkflow) Tracer() opentracing.Tracer { return w.env.opts.Tracer }
 
+func (w *testWorkflow) WorkflowInterceptors() []WorkflowInterceptorFactory {
+	return w.env.opts.WorkflowInterceptorChainFactories
+}
+
 func (w *testWorkflow) NextID() string {
 	w.counter++
 	return strconv.FormatInt(w.counter, 10)
@@ -1032,7 +1036,7 @@ func (w *testWorkflow) MutableSideEffect(id string, f func() interface{}, equals
 	return newEncodedValue(data, w.env.dc())
 }
 
-func (w *testWorkflow) GetVersion(changeID string, minSupported, maxSupported Version) Version {
+func (w *testWorkflow) GetVersion(changeID string, minSupported, maxSupported Version, cfg getVersionConfig) Version {
 	e := w.env
 	if e.hasMock(mockGetVersion) {
 		rets, _ := e.callMock(mockGetVersion, []interface{}{changeID, minSupported, maxSupported})
@@ -1047,8 +1051,10 @@ func (w *testWorkflow) GetVersion(changeID string, minSupported, maxSupported Ve
 		validateVersion(changeID, v, minSupported, maxSupported)
 		return v
 	}
-	w.versions[changeID] = maxSupported
-	return maxSupported
+	v := cfg.firstVersion(false, minSupported, maxSupported)
+	validateVersion(changeID, v, minSupported, maxSupported)
+	w.versions[changeID] = v
+	return v
 }
 
 func (w *testWorkflow) UpsertSearchAttributes(attrs map[string]interface{}) error {

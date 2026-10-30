@@ -69,6 +69,9 @@ type (
 	HeaderReader = sdk.HeaderReader
 	// HeaderWriter writes header fields.
 	HeaderWriter = sdk.HeaderWriter
+	// GetVersionOption changes the version the first GetVersion call for a
+	// change ID returns.
+	GetVersionOption = sdk.GetVersionOption
 	// ParentClosePolicy says what happens to a child when its parent closes.
 	ParentClosePolicy = sdk.ParentClosePolicy
 	// WorkflowIDReusePolicy says when a workflow ID may be reused.
@@ -175,9 +178,18 @@ func MutableSideEffect(ctx Context, id string, f func(ctx Context) interface{}, 
 }
 
 // GetVersion returns the code version to use for changeID.
-func GetVersion(ctx Context, changeID string, minSupported, maxSupported Version) Version {
-	return sdk.GetVersion(ctx, changeID, minSupported, maxSupported)
+func GetVersion(ctx Context, changeID string, minSupported, maxSupported Version, opts ...GetVersionOption) Version {
+	return sdk.GetVersion(ctx, changeID, minSupported, maxSupported, opts...)
 }
+
+// ExecuteWithVersion makes the first GetVersion call for a change ID return
+// version instead of maxSupported. It lets new code roll out behind the old
+// version first: deploy with ExecuteWithVersion(old), then drop it.
+func ExecuteWithVersion(version Version) GetVersionOption { return sdk.ExecuteWithVersion(version) }
+
+// ExecuteWithMinVersion makes the first GetVersion call for a change ID
+// return minSupported instead of maxSupported.
+func ExecuteWithMinVersion() GetVersionOption { return sdk.ExecuteWithMinVersion() }
 
 // SetQueryHandler registers a query handler.
 func SetQueryHandler(ctx Context, queryType string, handler interface{}) error {
