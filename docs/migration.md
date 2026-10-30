@@ -21,7 +21,7 @@ grep -rl 'go.uber.org/cadence' --include='*.go' . | xargs sed -i \
 | `go.uber.org/cadence/testsuite` | `github.com/larsla/takt/testsuite` |
 | `go.uber.org/cadence/.gen/go/shared` | `github.com/larsla/takt/.gen/go/shared` |
 
-Logging stays on `go.uber.org/zap` and metrics on `github.com/uber-go/tally`, so loggers and scopes you pass in today keep working.
+Logging stays on `go.uber.org/zap` and metrics on `github.com/uber-go/tally`, so loggers and scopes you pass in today keep working. Metric names start with `takt-` instead of `cadence-`; [metrics.md](metrics.md) lists them.
 
 ## 2. Replace the service client
 

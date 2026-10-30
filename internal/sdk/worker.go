@@ -137,6 +137,11 @@ type Worker struct {
 	laLimit   *rate.Limiter
 	queryStop func()
 	cache     *stickyCache
+	// raw is the service as given; service records metrics around it.
+	raw           api.Service
+	scope         tally.Scope // tagged with domain and task list
+	decisionScope tally.Scope
+	activityScope tally.Scope
 	// fullReplays counts decision tasks that replayed the whole history.
 	fullReplays atomic.Int64
 }
@@ -144,9 +149,11 @@ type Worker struct {
 // NewWorker creates a worker for a domain and task list.
 func NewWorker(service api.Service, domain, taskList string, options WorkerOptions) *Worker {
 	options.defaults(taskList)
+	scope := tagged(options.MetricsScope, tagDomain, domain, tagTaskList, taskList)
 	w := &Worker{
 		registry: newRegistry(globalRegistry),
-		service:  service,
+		service:  withServiceMetrics(service, scope),
+		raw:      service,
 		domain:   domain,
 		taskList: taskList,
 		opts:     options,
@@ -154,9 +161,14 @@ func NewWorker(service api.Service, domain, taskList string, options WorkerOptio
 		stopC:    make(chan struct{}),
 		laSem:    make(chan struct{}, options.MaxConcurrentLocalActivityExecutionSize),
 		laLimit:  limiter(options.WorkerLocalActivitiesPerSecond),
+
+		scope:         scope,
+		decisionScope: tagged(scope, tagWorkerType, workerTypeDecision),
+		activityScope: tagged(scope, tagWorkerType, workerTypeActivity),
 	}
 	if !options.DisableStickyExecution {
 		w.cache = newStickyCache(int(stickyCacheSize.Load()))
+		w.cache.scope = w.decisionScope
 	}
 	return w
 }
@@ -187,10 +199,12 @@ func (w *Worker) Start() error {
 	if !w.opts.DisableWorkflowWorker && len(workflows) > 0 {
 		sem := make(chan struct{}, w.opts.MaxConcurrentDecisionTaskExecutionSize)
 		lim := limiter(w.opts.WorkerDecisionTasksPerSecond)
+		w.decisionScope.Counter(MetricWorkerStart).Inc(1)
 		for range w.opts.MaxConcurrentDecisionTaskPollers {
+			w.decisionScope.Counter(MetricPollerStart).Inc(1)
 			w.wg.Go(func() { w.pollLoop(sem, lim, w.pollDecision) })
 		}
-		if l, ok := w.service.(queryListener); ok {
+		if l, ok := w.raw.(queryListener); ok {
 			stop, err := l.ListenQueries(w.domain, w.taskList, w.handleQuery)
 			if err != nil {
 				w.cancel()
@@ -206,7 +220,9 @@ func (w *Worker) Start() error {
 			perSecond = w.opts.TaskListActivitiesPerSecond
 		}
 		lim := limiter(perSecond)
+		w.activityScope.Counter(MetricWorkerStart).Inc(1)
 		for range w.opts.MaxConcurrentActivityTaskPollers {
+			w.activityScope.Counter(MetricPollerStart).Inc(1)
 			w.wg.Go(func() { w.pollLoop(sem, lim, w.pollActivity) })
 		}
 	}
@@ -286,21 +302,41 @@ func (w *Worker) pollLoop(sem chan struct{}, lim *rate.Limiter, poll func() (fun
 }
 
 func (w *Worker) pollDecision() (func(), error) {
+	start := time.Now()
 	task, err := w.service.PollForDecisionTask(w.ctx, &api.PollForDecisionTaskRequest{
 		Domain: w.domain, TaskList: &api.TaskList{Name: w.taskList}, Identity: w.opts.Identity,
 	})
-	if err != nil || len(task.TaskToken) == 0 {
+	gotTask := err == nil && len(task.TaskToken) > 0
+	if w.ctx.Err() == nil {
+		pollMetrics(w.decisionScope, MetricDecisionPoll, MetricDecisionPollFailed, MetricDecisionPollNoTask,
+			MetricDecisionPollSucceed, MetricDecisionPollLatency, start, gotTask, err)
+	}
+	if !gotTask {
 		return nil, err
+	}
+	if task.ScheduledTimestamp > 0 && task.StartedTimestamp >= task.ScheduledTimestamp {
+		tagged(w.decisionScope, tagWorkflowType, task.WorkflowType.Name).Timer(MetricDecisionScheduledToStart).
+			Record(time.Duration(task.StartedTimestamp - task.ScheduledTimestamp))
 	}
 	return func() { w.handleDecision(task) }, nil
 }
 
 func (w *Worker) pollActivity() (func(), error) {
+	start := time.Now()
 	task, err := w.service.PollForActivityTask(w.ctx, &api.PollForActivityTaskRequest{
 		Domain: w.domain, TaskList: &api.TaskList{Name: w.taskList}, Identity: w.opts.Identity,
 	})
-	if err != nil || len(task.TaskToken) == 0 {
+	gotTask := err == nil && len(task.TaskToken) > 0
+	if w.ctx.Err() == nil {
+		pollMetrics(w.activityScope, MetricActivityPoll, MetricActivityPollFailed, MetricActivityPollNoTask,
+			MetricActivityPollSucceed, MetricActivityPollLatency, start, gotTask, err)
+	}
+	if !gotTask {
 		return nil, err
+	}
+	if task.ScheduledTimestampOfThisAttempt > 0 && task.StartedTimestamp >= task.ScheduledTimestampOfThisAttempt {
+		tagged(w.activityScope, tagActivityType, task.ActivityType.Name).Timer(MetricActivityScheduledToStart).
+			Record(time.Duration(task.StartedTimestamp - task.ScheduledTimestampOfThisAttempt))
 	}
 	return func() { w.handleActivity(task) }, nil
 }
@@ -330,14 +366,32 @@ func fetchHistory(ctx context.Context, service api.Service, domain string, exec 
 	return fullHistory(ctx, service, domain, exec, resp.History.Events, resp.NextPageToken)
 }
 
-func (w *Worker) newReplayer(exec *api.WorkflowExecution, logger *zap.Logger, la laExecutor) *replayer {
+// historyPages fetches the remaining pages of a decision task's history
+// and records Cadence's get-history metrics when there were any.
+func (w *Worker) historyPages(ctx context.Context, scope tally.Scope, exec *api.WorkflowExecution, first []*api.HistoryEvent, token []byte) ([]*api.HistoryEvent, error) {
+	if len(token) == 0 {
+		return first, nil
+	}
+	start := time.Now()
+	scope.Counter(MetricWorkflowGetHistory).Inc(1)
+	events, err := fullHistory(ctx, w.service, w.domain, exec, first, token)
+	scope.Timer(MetricWorkflowGetHistoryLatency).Record(time.Since(start))
+	if err != nil {
+		scope.Counter(MetricWorkflowGetHistoryFailed).Inc(1)
+	} else {
+		scope.Counter(MetricWorkflowGetHistorySucceed).Inc(1)
+	}
+	return events, err
+}
+
+func (w *Worker) newReplayer(exec *api.WorkflowExecution, wfType string, logger *zap.Logger, la laExecutor) *replayer {
 	return newReplayer(replayerConfig{
 		domain:                w.domain,
 		execution:             WorkflowExecution{ID: exec.WorkflowID, RunID: exec.RunID},
 		registry:              w.registry,
 		dataConverter:         w.opts.DataConverter,
 		logger:                logger,
-		scope:                 w.opts.MetricsScope,
+		scope:                 tagged(w.scope, tagWorkflowType, wfType),
 		enableLoggingInReplay: w.opts.EnableLoggingInReplay,
 		laExec:                la,
 	})
@@ -355,21 +409,33 @@ func (w *Worker) handleDecision(task *api.PollForDecisionTaskResponse) {
 	}
 	ctx, cancel := context.WithTimeout(w.ctx, timeout)
 	defer cancel()
+	scope := tagged(w.decisionScope, tagWorkflowType, task.WorkflowType.Name)
 
-	events, err := fullHistory(ctx, w.service, w.domain, exec, task.History.Events, task.NextPageToken)
+	events, err := w.historyPages(ctx, scope, exec, task.History.Events, task.NextPageToken)
 	if err != nil {
 		logger.Error("failed to fetch history", zap.Error(err))
 		return
 	}
+	start := time.Now()
 	r, decisions, err := w.runDecisionTask(ctx, task, events, logger)
+	scope.Timer(MetricDecisionExecutionLatency).Record(time.Since(start))
 	if err != nil {
 		r.close()
-		w.decisionFailed(ctx, logger, task, err)
+		scope.Counter(MetricDecisionExecutionFailed).Inc(1)
+		w.decisionFailed(ctx, logger, scope, task, err)
 		return
 	}
+	start = time.Now()
 	_, err = w.service.RespondDecisionTaskCompleted(ctx, &api.RespondDecisionTaskCompletedRequest{
 		TaskToken: task.TaskToken, Decisions: decisions, Identity: w.opts.Identity,
 	})
+	scope.Timer(MetricDecisionResponseLatency).Record(time.Since(start))
+	if err == nil {
+		scope.Counter(MetricDecisionTaskCompleted).Inc(1)
+		workflowCloseMetrics(scope, decisions, workflowStartTime(events))
+	} else {
+		scope.Counter(MetricDecisionResponseFailed).Inc(1)
+	}
 	if err != nil || r.completed {
 		r.close()
 		if err != nil {
@@ -389,22 +455,30 @@ func (w *Worker) runDecisionTask(ctx context.Context, task *api.PollForDecisionT
 			events[e.consumed-1].EventID == e.lastStarted {
 			decisions, err := e.r.resume(ctx, events[e.consumed-1:], e.sent)
 			if !errors.Is(err, errCacheMismatch) {
+				w.cache.hit()
 				return e.r, decisions, err
 			}
 		}
 		e.r.close()
 	}
+	w.cache.miss()
 	w.fullReplays.Add(1)
-	r := w.newReplayer(task.WorkflowExecution, logger, w)
+	r := w.newReplayer(task.WorkflowExecution, task.WorkflowType.Name, logger, w)
 	decisions, err := r.replayHistory(ctx, events, modeTask)
 	return r, decisions, err
 }
 
-func (w *Worker) decisionFailed(ctx context.Context, logger *zap.Logger, task *api.PollForDecisionTaskResponse, err error) {
+func (w *Worker) decisionFailed(ctx context.Context, logger *zap.Logger, scope tally.Scope, task *api.PollForDecisionTaskResponse, err error) {
 	var (
 		nd *nondeterminismError
 		pe *PanicError
 	)
+	if errors.As(err, &nd) {
+		scope.Counter(MetricNonDeterministicError).Inc(1)
+	}
+	if errors.As(err, &pe) {
+		scope.Counter(MetricDecisionTaskPanic).Inc(1)
+	}
 	failWorkflow := (errors.As(err, &nd) && w.opts.NonDeterministicWorkflowPolicy == NonDeterministicWorkflowPolicyFailWorkflow) ||
 		(errors.As(err, &pe) && w.opts.WorkflowPanicPolicy == FailWorkflow)
 	if failWorkflow {
@@ -446,7 +520,7 @@ func (w *Worker) handleQuery(ctx context.Context, req *api.WorkerQueryRequest) *
 	if err != nil {
 		return &api.WorkerQueryResponse{ErrorMessage: err.Error()}
 	}
-	r := w.newReplayer(req.Execution, w.logger, nil)
+	r := w.newReplayer(req.Execution, "", w.logger, nil)
 	defer r.close()
 	if _, err := r.replayHistory(ctx, events, modeQuery); err != nil {
 		return &api.WorkerQueryResponse{ErrorMessage: err.Error()}
@@ -489,7 +563,7 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 		service:          w.service,
 		dc:               w.opts.DataConverter,
 		logger:           logger,
-		scope:            w.opts.MetricsScope,
+		scope:            tagged(w.scope, tagActivityType, name),
 		identity:         w.opts.Identity,
 		heartbeatDetails: task.HeartbeatDetails,
 		workerStop:       w.stopC,
@@ -499,8 +573,10 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 	env.cancel = cancel
 	ctx = context.WithValue(ctx, activityEnvKey, env)
 
+	scope := tagged(w.activityScope, tagActivityType, name)
 	var result []byte
 	var err error
+	execStart := time.Now()
 	if fn, ok := w.getActivity(name); ok {
 		result, err = runActivity(ctx, fn, task.Input, w.opts.DataConverter)
 	} else {
@@ -508,10 +584,20 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 	}
 	ctxErr := ctx.Err()
 	env.stopHeartbeats()
+	scope.Timer(MetricActivityExecutionLatency).Record(time.Since(execStart))
+	var pe *PanicError
+	if errors.As(err, &pe) {
+		scope.Counter(MetricActivityTaskPanic).Inc(1)
+	}
+	if err != nil && !errors.Is(err, ErrActivityResultPending) {
+		scope.Counter(MetricActivityExecutionFailed).Inc(1)
+	}
 
 	rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer rcancel()
 	var respondErr error
+	var outcome string
+	respondStart := time.Now()
 	switch {
 	case errors.Is(err, ErrActivityResultPending):
 		return
@@ -524,22 +610,30 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 		if errors.As(err, &ce) {
 			details = encodeDetails(ce.details, w.opts.DataConverter)
 		}
+		outcome = MetricActivityTaskCanceled
 		respondErr = w.service.RespondActivityTaskCanceled(rctx, &api.RespondActivityTaskCanceledRequest{
 			TaskToken: task.TaskToken, Details: details, Identity: w.opts.Identity,
 		})
 	case err != nil:
 		reason, details := errorDetails(err, w.opts.DataConverter)
+		outcome = MetricActivityTaskFailed
 		respondErr = w.service.RespondActivityTaskFailed(rctx, &api.RespondActivityTaskFailedRequest{
 			TaskToken: task.TaskToken, Reason: reason, Details: details, Identity: w.opts.Identity,
 		})
 	default:
+		outcome = MetricActivityTaskCompleted
 		respondErr = w.service.RespondActivityTaskCompleted(rctx, &api.RespondActivityTaskCompletedRequest{
 			TaskToken: task.TaskToken, Result: result, Identity: w.opts.Identity,
 		})
 	}
+	scope.Timer(MetricActivityResponseLatency).Record(time.Since(respondStart))
 	if respondErr != nil {
+		scope.Counter(MetricActivityResponseFailed).Inc(1)
 		logger.Warn("failed to report activity result", zap.Error(respondErr))
+		return
 	}
+	scope.Counter(outcome).Inc(1)
+	scope.Timer(MetricActivityEndToEndLatency).Record(time.Since(scheduled))
 }
 
 // executeLocal implements laExecutor.
@@ -555,7 +649,27 @@ func (w *Worker) executeLocal(ctx context.Context, info *WorkflowInfo, p localAc
 			return laOutcome{err: err}
 		}
 	}
-	return runLocalActivity(ctx, info, p, w.opts.DataConverter, w.logger, w.opts.MetricsScope, w.stopC)
+	scope := tagged(w.scope, tagWorkerType, workerTypeLocalActivity, tagActivityType, p.activityType)
+	scope.Counter(MetricLocalActivityTotal).Inc(1)
+	start := time.Now()
+	out := runLocalActivity(ctx, info, p, w.opts.DataConverter, w.logger, tagged(w.scope, tagActivityType, p.activityType), w.stopC)
+	scope.Timer(MetricLocalActivityExecutionLatency).Record(time.Since(start))
+	var (
+		pe *PanicError
+		te *TimeoutError
+	)
+	switch {
+	case out.err == nil:
+	case errors.As(out.err, &pe):
+		scope.Counter(MetricLocalActivityPanic).Inc(1)
+	case errors.As(out.err, &te):
+		scope.Counter(MetricLocalActivityTimeout).Inc(1)
+	case errors.Is(out.err, context.Canceled) || IsCanceledError(out.err):
+		scope.Counter(MetricLocalActivityCanceled).Inc(1)
+	default:
+		scope.Counter(MetricLocalActivityFailed).Inc(1)
+	}
+	return out
 }
 
 // runLocalActivity runs a local activity with its retry policy.

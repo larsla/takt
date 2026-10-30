@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/uber-go/tally"
+
 	"github.com/larsla/takt/api"
 )
 
@@ -34,10 +36,23 @@ type stickyCache struct {
 	max   int
 	order *list.List
 	byRun map[string]*list.Element
+	scope tally.Scope
 }
 
 func newStickyCache(size int) *stickyCache {
-	return &stickyCache{max: size, order: list.New(), byRun: map[string]*list.Element{}}
+	return &stickyCache{max: size, order: list.New(), byRun: map[string]*list.Element{}, scope: tally.NoopScope}
+}
+
+func (c *stickyCache) hit() {
+	if c != nil {
+		c.scope.Counter(MetricStickyCacheHit).Inc(1)
+	}
+}
+
+func (c *stickyCache) miss() {
+	if c != nil {
+		c.scope.Counter(MetricStickyCacheMiss).Inc(1)
+	}
 }
 
 // take removes and returns the entry of a run, if cached.
@@ -76,7 +91,12 @@ func (c *stickyCache) put(e *stickyEntry) {
 		delete(c.byRun, ev.runID)
 		evicted = append(evicted, ev)
 	}
+	size := c.order.Len()
 	c.mu.Unlock()
+	c.scope.Gauge(MetricStickyCacheSize).Update(float64(size))
+	if len(evicted) > 0 {
+		c.scope.Counter(MetricStickyCacheEvict).Inc(int64(len(evicted)))
+	}
 	for _, ev := range evicted {
 		ev.r.close()
 	}

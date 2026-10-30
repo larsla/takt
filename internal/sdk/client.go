@@ -112,7 +112,8 @@ func NewClient(service api.Service, domain string, options *ClientOptions) Clien
 	if o.MetricsScope == nil {
 		o.MetricsScope = tally.NoopScope
 	}
-	return &workflowClient{service: service, domain: domain, dc: orDefault(o.DataConverter), identity: o.Identity, scope: o.MetricsScope}
+	scope := tagged(o.MetricsScope, tagDomain, domain)
+	return &workflowClient{service: withServiceMetrics(service, scope), domain: domain, dc: orDefault(o.DataConverter), identity: o.Identity, scope: scope}
 }
 
 func (c *workflowClient) startRequest(options StartWorkflowOptions, workflow interface{}, args []interface{}) (*api.StartWorkflowExecutionRequest, error) {
@@ -599,7 +600,10 @@ type domainClient struct {
 }
 
 // NewDomainClient creates a DomainClient.
-func NewDomainClient(service api.Service, _ *ClientOptions) DomainClient {
+func NewDomainClient(service api.Service, options *ClientOptions) DomainClient {
+	if options != nil && options.MetricsScope != nil {
+		service = withServiceMetrics(service, options.MetricsScope)
+	}
 	return &domainClient{service: service}
 }
 

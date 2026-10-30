@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nats.go/micro"
+	"github.com/uber-go/tally"
 
 	"github.com/larsla/takt/api"
 	"github.com/larsla/takt/internal/server/engine"
@@ -36,6 +37,8 @@ type Config struct {
 	Engine engine.Config
 	// MaxConcurrent bounds in-flight API calls, timers and transfers. Defaults to 256.
 	MaxConcurrent int
+	// Metrics receives server and engine metrics. Defaults to tally.NoopScope.
+	Metrics tally.Scope
 }
 
 // Server is a running takt server.
@@ -48,6 +51,7 @@ type Server struct {
 	wg     sync.WaitGroup
 	sem    chan struct{}
 	cons   []jetstream.ConsumeContext
+	scope  tally.Scope
 }
 
 const requestTimeout = 2 * time.Minute
@@ -66,14 +70,17 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.JanitorInterval == 0 {
 		cfg.JanitorInterval = time.Hour
 	}
+	if cfg.Metrics == nil {
+		cfg.Metrics = tally.NoopScope
+	}
 	ecfg := cfg.Engine
-	ecfg.NC, ecfg.JS, ecfg.Logger = cfg.NC, cfg.JS, cfg.Logger
+	ecfg.NC, ecfg.JS, ecfg.Logger, ecfg.Metrics = cfg.NC, cfg.JS, cfg.Logger, cfg.Metrics
 	e, err := engine.New(ctx, ecfg)
 	if err != nil {
 		return nil, err
 	}
 	sctx, cancel := context.WithCancel(context.Background())
-	s := &Server{e: e, log: cfg.Logger, ctx: sctx, cancel: cancel, sem: make(chan struct{}, cfg.MaxConcurrent)}
+	s := &Server{e: e, log: cfg.Logger, ctx: sctx, cancel: cancel, sem: make(chan struct{}, cfg.MaxConcurrent), scope: cfg.Metrics}
 	if err := e.StartIndex(sctx); err != nil {
 		cancel()
 		return nil, fmt.Errorf("visibility index: %w", err)
@@ -226,14 +233,18 @@ func (s *Server) startService(nc *nats.Conn) error {
 func handle[Req, Resp any](s *Server, f func(context.Context, *Req) (Resp, error)) micro.Handler {
 	return micro.HandlerFunc(func(r micro.Request) {
 		s.run(func() {
+			m := s.request(r.Subject())
 			var req Req
 			if err := json.Unmarshal(r.Data(), &req); err != nil {
-				s.respondError(r, &api.BadRequestError{Message: "malformed request: " + err.Error()})
+				err := &api.BadRequestError{Message: "malformed request: " + err.Error()}
+				m.done(err)
+				s.respondError(r, err)
 				return
 			}
 			ctx, cancel := context.WithTimeout(s.ctx, requestTimeout)
 			defer cancel()
 			resp, err := f(ctx, &req)
+			m.done(err)
 			if err != nil {
 				s.respondError(r, err)
 				return

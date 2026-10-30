@@ -23,6 +23,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/uber-go/tally"
 
 	"github.com/larsla/takt/api"
 )
@@ -43,6 +44,8 @@ type Config struct {
 	// RetentionUnit is the length of one retention "day". Defaults to 24h;
 	// tests shorten it.
 	RetentionUnit time.Duration
+	// Metrics receives the engine's metrics. Defaults to tally.NoopScope.
+	Metrics tally.Scope
 }
 
 // Engine applies API calls, timers and transfers to workflow state.
@@ -66,6 +69,7 @@ type Engine struct {
 
 	index         *visIndex
 	retentionUnit time.Duration
+	scope         tally.Scope
 }
 
 const (
@@ -88,6 +92,10 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		maxRetry:      50,
 		index:         newVisIndex(),
 		retentionUnit: cfg.RetentionUnit,
+		scope:         cfg.Metrics,
+	}
+	if e.scope == nil {
+		e.scope = tally.NoopScope
 	}
 	if e.retentionUnit == 0 {
 		e.retentionUnit = 24 * time.Hour
@@ -247,6 +255,7 @@ func (e *Engine) update(ctx context.Context, domain, workflowID, runID string, f
 		if !t.dirty() {
 			return s, nil
 		}
+		events := t.events
 		t.commit()
 		newRev, err := e.execs.Update(ctx, key, encodeState(s), rev)
 		if isConflict(err) {
@@ -255,6 +264,7 @@ func (e *Engine) update(ctx context.Context, domain, workflowID, runID string, f
 		if err != nil {
 			return nil, err
 		}
+		e.emitEvents(s, events)
 		final, _, err := e.finalize(ctx, key, s, newRev)
 		if err != nil {
 			// The change is committed; finalize will be retried by the
@@ -282,6 +292,7 @@ func (e *Engine) update(ctx context.Context, domain, workflowID, runID string, f
 func (e *Engine) create(ctx context.Context, t *tx) (bool, error) {
 	s := t.s
 	key := runKey(s.Domain, s.WorkflowID, s.RunID)
+	events := t.events
 	t.commit()
 	rev, err := e.execs.Create(ctx, key, encodeState(s))
 	if isConflict(err) {
@@ -290,6 +301,7 @@ func (e *Engine) create(ctx context.Context, t *tx) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	e.emitEvents(s, events)
 	if _, _, err := e.finalize(ctx, key, s, rev); err != nil {
 		e.log.Warn("finalize failed", "key", key, "err", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/larsla/takt/api"
 )
@@ -17,6 +18,7 @@ func (e *Engine) HandleTimer(ctx context.Context, data []byte) error {
 		e.log.Warn("dropping malformed timer", "err", err)
 		return nil
 	}
+	start := time.Now()
 	_, err := e.update(ctx, tt.Domain, tt.WorkflowID, tt.RunID, func(t *tx) error {
 		if !t.s.Running() {
 			return nil
@@ -26,8 +28,9 @@ func (e *Engine) HandleTimer(ctx context.Context, data []byte) error {
 	})
 	var nf *api.EntityNotExistsError
 	if errors.As(err, &nf) {
-		return nil
+		err = nil
 	}
+	e.queueTask(timerOperations[tt.Kind], tt.Domain, start, err)
 	return err
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/uber-go/tally"
 
 	"github.com/larsla/takt/api"
 	"github.com/larsla/takt/internal/embeddednats"
@@ -44,6 +45,8 @@ type Options struct {
 	JanitorInterval time.Duration
 	// RetentionUnit is the length of a retention day. Defaults to 24h.
 	RetentionUnit time.Duration
+	// Metrics receives server metrics. Defaults to none.
+	Metrics tally.Scope
 }
 
 // New starts a stack and registers Domain. Everything stops at test cleanup.
@@ -84,7 +87,8 @@ func New(t testing.TB, opts ...Options) *Env {
 	srv, err := server.Start(ctx, server.Config{
 		NC: nc, JS: js, Logger: o.Logger,
 		SweepInterval: o.SweepInterval, JanitorInterval: o.JanitorInterval,
-		Engine: engine.Config{RetentionUnit: o.RetentionUnit},
+		Engine:  engine.Config{RetentionUnit: o.RetentionUnit},
+		Metrics: o.Metrics,
 	})
 	if err != nil {
 		t.Fatal(err)

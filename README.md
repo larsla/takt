@@ -87,6 +87,10 @@ takt dev                                            # embedded, temporary data, 
 
 The web UI has no authentication. It is read-only unless `--ui-write` is set (on by default in `takt dev`). Bind it to a private address.
 
+### Metrics
+
+`--metrics-addr` serves Prometheus metrics. Server and SDK metrics use Cadence's names with a `takt` prefix, so Cadence dashboards carry over with a find-and-replace. [docs/metrics.md](docs/metrics.md) lists them.
+
 ## Development
 
 ```sh

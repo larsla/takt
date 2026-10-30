@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/larsla/takt/api"
 )
@@ -17,6 +18,13 @@ func (e *Engine) HandleTransfer(ctx context.Context, data []byte) error {
 		e.log.Warn("dropping malformed transfer", "err", err)
 		return nil
 	}
+	start := time.Now()
+	err := e.handleTransfer(ctx, &tr)
+	e.queueTask(transferOperations[tr.Kind], tr.Domain, start, err)
+	return err
+}
+
+func (e *Engine) handleTransfer(ctx context.Context, tr *Transfer) error {
 	s, _, err := e.load(ctx, runKey(tr.Domain, tr.WorkflowID, tr.RunID))
 	var nf *api.EntityNotExistsError
 	if errors.As(err, &nf) {

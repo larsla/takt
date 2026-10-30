@@ -18,6 +18,7 @@ import (
 
 	"github.com/larsla/takt/api"
 	"github.com/larsla/takt/internal/embeddednats"
+	"github.com/larsla/takt/internal/metrics"
 	"github.com/larsla/takt/internal/server"
 	"github.com/larsla/takt/internal/server/engine"
 	"github.com/larsla/takt/internal/server/migrations"
@@ -87,6 +88,7 @@ type serverConfig struct {
 	natsPort     int
 	dataDir      string
 	uiAddr       string
+	metricsAddr  string
 	replicas     int
 	debug        bool
 	devDomain    string
@@ -103,6 +105,7 @@ func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfi
 	fs.IntVar(&cfg.natsPort, "nats-port", 4222, "listen port for embedded NATS (-1 picks a free port)")
 	fs.StringVar(&cfg.dataDir, "data-dir", "", "JetStream store dir for embedded NATS (empty: temporary dir)")
 	fs.StringVar(&cfg.uiAddr, "ui-addr", "127.0.0.1:8088", "web UI listen address (empty disables the UI)")
+	fs.StringVar(&cfg.metricsAddr, "metrics-addr", "", "listen address for Prometheus /metrics and /healthz (empty disables it)")
 	fs.IntVar(&cfg.replicas, "replicas", 0, "replica count for streams and buckets (0: 1)")
 	fs.BoolVar(&cfg.uiWrite, "ui-write", mode == "dev", "allow signal, cancel and terminate from the web UI")
 	fs.BoolVar(&cfg.debug, "debug", false, "verbose logging")
@@ -120,8 +123,9 @@ func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfi
 
 // readyInfo is passed to the onReady hook once everything is listening.
 type readyInfo struct {
-	NATSURL string
-	UIAddr  string
+	NATSURL     string
+	UIAddr      string
+	MetricsAddr string
 }
 
 func runServer(ctx context.Context, mode string, args []string, stderr io.Writer, onReady func(readyInfo)) error {
@@ -167,7 +171,14 @@ func runServer(ctx context.Context, mode string, args []string, stderr io.Writer
 	}
 	log.Info("schema ready", "version", v)
 
-	takt, err := server.Start(ctx, server.Config{NC: nc, JS: js, Logger: log})
+	scfg := server.Config{NC: nc, JS: js, Logger: log}
+	var prom *metrics.Prometheus
+	if cfg.metricsAddr != "" {
+		prom = metrics.NewPrometheus(log)
+		defer func() { _ = prom.Close() }()
+		scfg.Metrics = prom.Scope
+	}
+	takt, err := server.Start(ctx, scfg)
 	if err != nil {
 		return err
 	}
@@ -180,20 +191,46 @@ func runServer(ctx context.Context, mode string, args []string, stderr io.Writer
 	}
 
 	info := readyInfo{NATSURL: natsURL}
-	var srv *http.Server
-	errc := make(chan error, 1)
-	if cfg.uiAddr != "" {
-		ln, err := net.Listen("tcp", cfg.uiAddr)
+	var servers []*http.Server
+	errc := make(chan error, 2)
+	serve := func(what, addr string, h http.Handler) (string, error) {
+		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			return fmt.Errorf("ui listen: %w", err)
+			return "", fmt.Errorf("%s listen: %w", what, err)
 		}
-		srv = &http.Server{
-			Handler:           web.New(web.Options{NC: nc, JS: js, Backend: takt.Engine(), Logger: log, AllowWrite: cfg.uiWrite}),
-			ReadHeaderTimeout: 10 * time.Second,
+		srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+		servers = append(servers, srv)
+		go func() { errc <- fmt.Errorf("%s server: %w", what, srv.Serve(ln)) }()
+		return ln.Addr().String(), nil
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, srv := range servers {
+			_ = srv.Shutdown(shutdownCtx)
 		}
-		info.UIAddr = ln.Addr().String()
-		go func() { errc <- srv.Serve(ln) }()
+	}()
+	if cfg.uiAddr != "" {
+		ui := web.New(web.Options{NC: nc, JS: js, Backend: takt.Engine(), Logger: log, AllowWrite: cfg.uiWrite})
+		if info.UIAddr, err = serve("ui", cfg.uiAddr, ui); err != nil {
+			return err
+		}
 		log.Info("web ui listening", "url", "http://"+info.UIAddr)
+	}
+	if prom != nil {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", prom.Handler)
+		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+			if !nc.IsConnected() {
+				http.Error(w, "nats disconnected", http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write([]byte("ok"))
+		})
+		if info.MetricsAddr, err = serve("metrics", cfg.metricsAddr, mux); err != nil {
+			return err
+		}
+		log.Info("metrics listening", "url", "http://"+info.MetricsAddr+"/metrics")
 	}
 	if onReady != nil {
 		onReady(info)
@@ -203,17 +240,10 @@ func runServer(ctx context.Context, mode string, args []string, stderr io.Writer
 	case <-ctx.Done():
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("ui server: %w", err)
-		}
-	}
-	log.Info("shutting down")
-	if srv != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
 	}
+	log.Info("shutting down")
 	return nil
 }
 

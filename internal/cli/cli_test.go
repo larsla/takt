@@ -60,7 +60,7 @@ func TestDevServesUI(t *testing.T) {
 	ready := make(chan readyInfo, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- runServer(ctx, "dev", []string{"--nats-port", "-1", "--ui-addr", "127.0.0.1:0", "--data-dir", t.TempDir()}, io.Discard, func(r readyInfo) { ready <- r })
+		done <- runServer(ctx, "dev", []string{"--nats-port", "-1", "--ui-addr", "127.0.0.1:0", "--metrics-addr", "127.0.0.1:0", "--data-dir", t.TempDir()}, io.Discard, func(r readyInfo) { ready <- r })
 	}()
 
 	var info readyInfo
@@ -84,6 +84,22 @@ func TestDevServesUI(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), ">default<") {
 		t.Fatalf("status %d, body %.200s", resp.StatusCode, body)
+	}
+
+	for path, want := range map[string]string{"/metrics": "go_goroutines", "/healthz": "ok"} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+info.MetricsAddr+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), want) {
+			t.Fatalf("%s: status %d, body %.300s", path, resp.StatusCode, body)
+		}
 	}
 
 	cancel()
