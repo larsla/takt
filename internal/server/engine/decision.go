@@ -42,11 +42,19 @@ func (e *Engine) RecordDecisionTaskStarted(ctx context.Context, req *api.RecordD
 	if err != nil {
 		return nil, err
 	}
+	if d := s.Decision; d == nil || d.ScheduleID != stub.ScheduleID || d.RequestID != req.RequestID {
+		return nil, errDecisionNotFound
+	}
 	return e.decisionTask(ctx, s)
 }
 
 func (e *Engine) decisionTask(ctx context.Context, s *State) (*api.PollForDecisionTaskResponse, error) {
 	d := s.Decision
+	if d == nil || d.StartedID == 0 {
+		// The state was read again after a lost finalize race and the
+		// decision task has moved on meanwhile.
+		return nil, errDecisionNotFound
+	}
 	events, token, err := e.readHistory(ctx, s, 0, e.pageSize)
 	if err != nil {
 		return nil, err

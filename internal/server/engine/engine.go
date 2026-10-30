@@ -270,7 +270,6 @@ func (e *Engine) update(ctx context.Context, domain, workflowID, runID string, f
 			// The change is committed; finalize will be retried by the
 			// next reader or the sweeper.
 			e.log.Warn("finalize failed", "key", key, "err", err)
-			return s, nil
 		}
 		if t.continued {
 			// Create the next run now so callers can follow the chain right
@@ -280,6 +279,12 @@ func (e *Engine) update(ctx context.Context, domain, workflowID, runID string, f
 			}
 		}
 		if final == nil {
+			// Another writer finalized this change, or finalizing failed.
+			// s still has the old HistorySeq, so callers reading history
+			// up to it would miss the new events: read the state again.
+			if cur, _, err := e.load(ctx, key); err == nil {
+				return cur, nil
+			}
 			return s, nil
 		}
 		return final, nil
@@ -323,6 +328,15 @@ func (e *Engine) finalize(ctx context.Context, key string, s *State, rev uint64)
 				return nil, 0, nil
 			}
 			seq, err = e.recoverAppend(ctx, s)
+			if errors.Is(err, errHistoryAhead) {
+				// The last batch is newer than ours. Another writer
+				// finalized ours and committed more after we read the
+				// revision, so the revision has moved on by now.
+				if _, curRev, gerr := e.get(ctx, key); gerr == nil && curRev != rev {
+					return nil, 0, nil
+				}
+				err = fmt.Errorf("history of %s diverged from state", key)
+			}
 		}
 		if err != nil {
 			return nil, 0, err
@@ -383,10 +397,11 @@ func (e *Engine) recoverAppend(ctx context.Context, s *State) (uint64, error) {
 	if json.Unmarshal(last.Data, &h) == nil && len(h.Events) > 0 && h.Events[0].EventID == s.Pending[0].EventID {
 		return last.Sequence, nil
 	}
-	return 0, fmt.Errorf("history of %s diverged from state", key(s))
+	return 0, errHistoryAhead
 }
 
-func key(s *State) string { return runKey(s.Domain, s.WorkflowID, s.RunID) }
+// errHistoryAhead means the last history batch is not the pending one.
+var errHistoryAhead = errors.New("last history batch is not the pending one")
 
 func (e *Engine) publish(ctx context.Context, s *State, item *OutboxItem) error {
 	switch item.Kind {
