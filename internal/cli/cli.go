@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -37,7 +39,8 @@ Commands:
   workflow  start, list, inspect, signal, query, cancel and terminate workflows
   version   print the version
 
-Run "takt <command> -h" for the flags of a command.
+Run "takt <command> -h" for the flags of a command. Every server flag can
+also be set with an environment variable: --nats-url is TAKT_NATS_URL.
 `
 
 // Run executes the command line and returns the process exit code.
@@ -74,7 +77,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// buildVersion is set at build time with
+// -ldflags "-X github.com/larsla/takt/internal/cli.buildVersion=v1.2.3".
+var buildVersion string
+
 func version() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
 		return bi.Main.Version
 	}
@@ -112,6 +122,9 @@ func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfi
 	if mode == "dev" {
 		fs.StringVar(&cfg.devDomain, "domain", "default", "domain to register on startup")
 	}
+	if err := flagsFromEnv(fs); err != nil {
+		return cfg, err
+	}
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -119,6 +132,21 @@ func parseServerFlags(mode string, args []string, stderr io.Writer) (serverConfi
 		return cfg, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
 	return cfg, nil
+}
+
+// flagsFromEnv sets flags from TAKT_<NAME> environment variables, with
+// dashes as underscores. Command line flags still win.
+func flagsFromEnv(fs *flag.FlagSet) error {
+	var err error
+	fs.VisitAll(func(f *flag.Flag) {
+		name := "TAKT_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
+		if v, ok := os.LookupEnv(name); ok && err == nil {
+			if serr := f.Value.Set(v); serr != nil {
+				err = fmt.Errorf("%s: %w", name, serr)
+			}
+		}
+	})
+	return err
 }
 
 // readyInfo is passed to the onReady hook once everything is listening.

@@ -146,3 +146,19 @@ func TestServerAgainstExternalNATS(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFlagsFromEnv(t *testing.T) {
+	t.Setenv("TAKT_REPLICAS", "3")
+	t.Setenv("TAKT_UI_ADDR", ":9999")
+	cfg, err := parseServerFlags("server", []string{"--ui-addr", ":1"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.replicas != 3 || cfg.uiAddr != ":1" {
+		t.Fatalf("replicas %d, ui %q", cfg.replicas, cfg.uiAddr)
+	}
+	t.Setenv("TAKT_REPLICAS", "many")
+	if _, err := parseServerFlags("server", nil, io.Discard); err == nil || !strings.Contains(err.Error(), "TAKT_REPLICAS") {
+		t.Fatalf("want an error naming TAKT_REPLICAS, got %v", err)
+	}
+}

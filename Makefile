@@ -31,7 +31,7 @@ TW_SHA := $(TW_SHA_$(TW_OS)-$(TW_ARCH))
 # Files that `make generate` produces and that must be committed.
 GENERATED := web/static/app.css .gen/go/shared/shared.go $(shell find . -name '*_templ.go' -not -path './bin/*')
 
-.PHONY: all build generate templ css shared check-generated lint sec test cover check vuln dev clean
+.PHONY: all build generate templ css shared check-generated lint sec test cover check vuln dev docker clean
 
 all: check build
 
@@ -89,6 +89,12 @@ vuln:
 
 dev:
 	$(GO) run ./cmd/takt dev
+
+IMAGE   ?= takt:dev
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+docker:
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE) .
 
 clean:
 	rm -rf $(BIN) takt coverage.out coverage.filtered.out

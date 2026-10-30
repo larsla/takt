@@ -87,6 +87,18 @@ takt dev                                            # embedded, temporary data, 
 
 The web UI has no authentication. It is read-only unless `--ui-write` is set (on by default in `takt dev`). Bind it to a private address.
 
+Every server flag can also come from the environment: `--nats-url` is `TAKT_NATS_URL`, `--metrics-addr` is `TAKT_METRICS_ADDR`.
+
+### Docker
+
+The image is built from `scratch` and holds only the static binary and CA certificates. It runs as uid/gid 65532, listens on `:8088` (UI), `:9090` (metrics) and, with embedded NATS, `:4222`.
+
+```sh
+docker run --rm -p 8088:8088 -p 4222:4222 ghcr.io/larsla/takt:<version> dev --nats-host 0.0.0.0
+docker run --rm ghcr.io/larsla/takt:<version> server --nats-url nats://nats:4222
+make docker        # build takt:dev locally
+```
+
 ### Metrics
 
 `--metrics-addr` serves Prometheus metrics. Server and SDK metrics use Cadence's names with a `takt` prefix, so Cadence dashboards carry over with a find-and-replace. [docs/metrics.md](docs/metrics.md) lists them.

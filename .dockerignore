@@ -1,0 +1,8 @@
+*
+!go.mod
+!go.sum
+!**/*.go
+!**/*.json
+!web/static/
+!.gen/
+**/*_test.go
