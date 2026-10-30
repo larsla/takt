@@ -15,6 +15,7 @@ require (
 	github.com/uber-go/tally v3.5.10+incompatible
 	go.uber.org/zap v1.28.0
 	golang.org/x/time v0.16.0
+	golang.org/x/tools v0.52.0
 )
 
 require (
@@ -87,7 +88,6 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/telemetry v0.0.0-20261010193011-f71dc92da45e // indirect
 	golang.org/x/text v0.43.0 // indirect
-	golang.org/x/tools v0.52.0 // indirect
 	golang.org/x/vuln v1.9.0 // indirect
 	google.golang.org/api v0.304.0 // indirect
 	google.golang.org/genai v1.75.0 // indirect

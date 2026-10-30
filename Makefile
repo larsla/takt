@@ -29,16 +29,16 @@ TW_SHA_macos-arm64 := cdf646702987a743464dff4d9c60fd4480d1c1e73dd819a9a67f107881
 TW_SHA := $(TW_SHA_$(TW_OS)-$(TW_ARCH))
 
 # Files that `make generate` produces and that must be committed.
-GENERATED := web/static/app.css .gen/go/shared/shared.go api/getters_gen.go $(shell find . -name '*_templ.go' -not -path './bin/*')
+GENERATED := web/static/app.css .gen/go/shared/shared.go api/getters_gen.go $(wildcard mocks/[A-Z]*.go) $(shell find . -name '*_templ.go' -not -path './bin/*')
 
-.PHONY: all build generate templ css shared check-generated lint sec test cover check ci vuln dev docker helm-lint clean
+.PHONY: all build generate templ css shared mocks check-generated lint sec test cover check ci vuln dev docker helm-lint clean
 
 all: check build
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o takt ./cmd/takt
 
-generate: templ css shared
+generate: templ css shared mocks
 
 templ:
 	$(GO) tool templ generate
@@ -46,6 +46,9 @@ templ:
 shared:
 	$(GO) run ./internal/tools/gengetters api api/getters_gen.go
 	$(GO) run ./internal/tools/genshared api .gen/go/shared/shared.go
+
+mocks:
+	$(GO) run ./internal/tools/genmocks mocks
 
 css: $(TAILWIND)
 	$(TAILWIND) -i web/styles/input.css -o web/static/app.css --minify
@@ -77,7 +80,7 @@ test:
 # Coverage across all packages, excluding generated code and main packages.
 cover:
 	$(GO) test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
-	grep -v -E '_templ\.go:|_gen\.go:|/cmd/|/examples/|/internal/tools/' coverage.out > coverage.filtered.out
+	grep -v -E '_templ\.go:|_gen\.go:|/mocks/[A-Z][A-Za-z]*\.go:|/cmd/|/examples/|/internal/tools/' coverage.out > coverage.filtered.out
 	@total=$$($(GO) tool cover -func=coverage.filtered.out | awk '/^total:/ {sub("%","",$$3); print $$3}'); \
 	echo "total coverage: $$total% (min $(COVER_MIN)%)"; \
 	awk -v t="$$total" -v m="$(COVER_MIN)" 'BEGIN { exit (t+0 >= m+0) ? 0 : 1 }' || \
