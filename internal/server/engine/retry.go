@@ -115,7 +115,7 @@ func jitter(max int32) int32 {
 	if err != nil {
 		return 0
 	}
-	return int32(n.Int64())
+	return int32(n.Int64()) // #nosec G115 -- n is below max, an int32
 }
 
 // clampInt64 converts a JetStream counter to int64 without overflowing.
