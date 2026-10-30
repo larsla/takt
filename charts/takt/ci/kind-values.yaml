@@ -1,0 +1,6 @@
+# Values for the CI install test: the image built in the same run.
+image:
+  registry: ""
+  repository: takt
+  tag: ci
+  pullPolicy: Never

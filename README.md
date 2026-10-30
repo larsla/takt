@@ -115,6 +115,10 @@ Pods run as non-root with a read-only root filesystem. [values.yaml](charts/takt
 
 `--metrics-addr` serves Prometheus metrics. Server and SDK metrics use Cadence's names with a `takt` prefix, so Cadence dashboards carry over with a find-and-replace. [docs/metrics.md](docs/metrics.md) lists them.
 
+## Releases
+
+Pushing a tag like `v1.2.3` runs the tests, then publishes the multi-arch image to `ghcr.io/larsla/takt` (tags `1.2.3`, `1.2` and `1`), the chart to `oci://ghcr.io/larsla/charts` with chart and app version `1.2.3`, and a GitHub release with binaries. Pull requests and pushes to `main` run `make check`, govulncheck, an image build with a smoke test, and a chart install on kind.
+
 ## Development
 
 ```sh
