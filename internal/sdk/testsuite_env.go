@@ -242,9 +242,10 @@ func (e *TestWorkflowEnvironment) CompleteActivity(taskToken []byte, result inte
 
 // CancelWorkflow requests cancellation of the workflow. Call it from a
 // delayed callback.
+// Once the workflow runs, it is safe to call from any goroutine, an
+// activity mock's included, as in Cadence.
 func (e *TestWorkflowEnvironment) CancelWorkflow() {
 	impl := e.impl
-	impl.flushSkipped()
 	cancel := func() {
 		if impl.root.cancelHandler != nil {
 			impl.root.cancelHandler()
@@ -252,16 +253,29 @@ func (e *TestWorkflowEnvironment) CancelWorkflow() {
 		}
 	}
 	if impl.root == nil {
+		impl.flushSkipped()
 		impl.pendingSg = append(impl.pendingSg, cancel)
 		return
 	}
-	cancel()
+	impl.post(func() {
+		impl.flushSkipped()
+		cancel()
+	})
 }
 
 // SignalWorkflow sends a signal to the workflow.
+// Once the workflow runs, it is safe to call from any goroutine, as in
+// Cadence.
 func (e *TestWorkflowEnvironment) SignalWorkflow(name string, input interface{}) {
-	e.impl.flushSkipped()
-	e.signal(name, input)
+	if e.impl.root == nil {
+		e.impl.flushSkipped()
+		e.signal(name, input)
+		return
+	}
+	e.impl.post(func() {
+		e.impl.flushSkipped()
+		e.signal(name, input)
+	})
 }
 
 func (e *TestWorkflowEnvironment) signal(name string, input interface{}) {

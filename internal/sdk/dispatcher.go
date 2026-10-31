@@ -156,15 +156,28 @@ func (c *coroutine) initialYield(status string) {
 // unblocked records progress after a blocking call returns.
 func (c *coroutine) unblocked() { c.keptBlocked = false }
 
+// exit ends the coroutine. A coroutine blocked outside the workflow API
+// (on a Go channel, say) never takes the exit function; exit gives up on
+// it after deadlockTimeout and leaves its goroutine behind rather than
+// hang.
 func (c *coroutine) exit() {
 	if c.closed {
 		return
 	}
-	c.unblock <- func(string) bool {
+	t := time.NewTimer(deadlockTimeout)
+	defer t.Stop()
+	select {
+	case c.unblock <- func(string) bool {
 		runtime.Goexit()
 		return false
+	}:
+	case <-t.C:
+		return
 	}
-	<-c.aboutToBlock
+	select {
+	case <-c.aboutToBlock:
+	case <-t.C:
+	}
 }
 
 func (c *coroutine) stackTrace() string {

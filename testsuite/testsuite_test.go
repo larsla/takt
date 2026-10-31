@@ -521,8 +521,7 @@ func (s *UnitTestSuite) Test_WorkerOptionsAndTaskLists() {
 	env.RegisterActivity(greetActivity)
 	env.SetActivityTaskList("elsewhere", greetActivity)
 	env.ExecuteWorkflow(greetingWorkflow, "x")
-	var te *takt.TimeoutError
-	s.True(errors.As(env.GetWorkflowError(), &te), "activity on a task list nobody serves times out")
+	s.ErrorContains(env.GetWorkflowError(), "unable to find activityType", "activity on a task list nobody serves fails")
 
 	env = s.NewTestWorkflowEnvironment()
 	env.SetLastCompletionResult("previous")
@@ -667,4 +666,118 @@ func (s *UnitTestSuite) TestSession() {
 	var out string
 	s.NoError(env.GetWorkflowResult(&out))
 	s.Equal("Hello session!", out)
+}
+
+// A retry policy with only an expiration stops retrying when it expires,
+// as on the server.
+func (s *UnitTestSuite) TestRetryExpiration() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterActivity(greetActivity)
+	var attempts int
+	env.OnActivity(greetActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, name string) (string, error) {
+		attempts++
+		return "", errors.New("down")
+	})
+	env.ExecuteWorkflow(func(ctx workflow.Context) error {
+		ao := activityOptions
+		ao.RetryPolicy = &takt.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 1, ExpirationInterval: time.Minute}
+		ctx = workflow.WithActivityOptions(ctx, ao)
+		return workflow.ExecuteActivity(ctx, greetActivity, "x").Get(ctx, nil)
+	})
+	s.ErrorContains(env.GetWorkflowError(), "down")
+	s.InDelta(60, attempts, 2)
+}
+
+// An activity that runs past its deadline timed out, even when it then
+// returns no error.
+func (s *UnitTestSuite) TestActivityDeadlineIsTimeout() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterActivity(greetActivity)
+	env.OnActivity(greetActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, name string) (string, error) {
+		<-ctx.Done()
+		return "late", nil
+	})
+	env.ExecuteWorkflow(func(ctx workflow.Context) (string, error) {
+		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			ScheduleToStartTimeout: time.Minute, StartToCloseTimeout: 100 * time.Millisecond,
+		})
+		var out string
+		err := workflow.ExecuteActivity(ctx, greetActivity, "x").Get(ctx, &out)
+		return out, err
+	})
+	s.True(takt.IsTimeoutError(env.GetWorkflowError()), "got %v", env.GetWorkflowError())
+}
+
+// Canceling the workflow cancels an activity blocked on its context.
+func (s *UnitTestSuite) TestCancelBlockedActivity() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterActivity(greetActivity)
+	env.OnActivity(greetActivity, mock.Anything, mock.Anything).Return(func(ctx context.Context, name string) (string, error) {
+		// A running activity stops the mock clock, so cancel from here.
+		env.CancelWorkflow()
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	env.ExecuteWorkflow(greetingWorkflow, "x")
+	s.True(takt.IsCanceledError(env.GetWorkflowError()), "got %v", env.GetWorkflowError())
+}
+
+func blockedChild(ctx workflow.Context) error { return nil }
+
+func blockedChildParent(ctx workflow.Context) error {
+	ctx = workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{ExecutionStartToCloseTimeout: time.Hour})
+	return workflow.ExecuteChildWorkflow(ctx, blockedChild).Get(ctx, nil)
+}
+
+// A child mock runs as the child workflow, so it can block on workflow
+// APIs, and canceling the parent ends it.
+func (s *UnitTestSuite) TestCancelWithBlockingChildMock() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(blockedChildParent)
+	env.RegisterWorkflow(blockedChild)
+	env.OnWorkflow(blockedChild, mock.Anything).Return(func(ctx workflow.Context) error {
+		workflow.GetSignalChannel(ctx, "never").Receive(ctx, nil)
+		return nil
+	})
+	env.RegisterDelayedCallback(env.CancelWorkflow, time.Minute)
+	env.ExecuteWorkflow(blockedChildParent)
+	s.True(env.IsWorkflowCompleted())
+	s.True(takt.IsCanceledError(env.GetWorkflowError()), "got %v", env.GetWorkflowError())
+
+	env = s.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(blockedChildParent)
+	env.RegisterWorkflow(blockedChild)
+	env.OnWorkflow(blockedChild, mock.Anything).Return(nil).After(24 * time.Hour)
+	env.RegisterDelayedCallback(env.CancelWorkflow, time.Minute)
+	env.ExecuteWorkflow(blockedChildParent)
+	s.True(takt.IsCanceledError(env.GetWorkflowError()), "got %v", env.GetWorkflowError())
+}
+
+// A child mock blocked on a Go channel fails the test instead of hanging
+// it.
+func (s *UnitTestSuite) TestChildMockBlockedOutsideWorkflow() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(blockedChildParent)
+	env.RegisterWorkflow(blockedChild)
+	block := make(chan struct{})
+	defer close(block)
+	env.OnWorkflow(blockedChild, mock.Anything).Return(func(ctx workflow.Context) error {
+		<-block
+		return nil
+	})
+	env.ExecuteWorkflow(blockedChildParent)
+	s.ErrorContains(env.GetWorkflowError(), "potential deadlock detected")
+}
+
+type greeting struct{ Text string }
+
+func nilGreeting(context.Context) (*greeting, error) { return nil, nil }
+
+// A nil pointer result has no value, as in Cadence.
+func (s *UnitTestSuite) TestNilResultHasNoValue() {
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(nilGreeting)
+	v, err := env.ExecuteActivity(nilGreeting)
+	s.NoError(err)
+	s.False(v.HasValue())
 }

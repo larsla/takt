@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"sort"
@@ -579,6 +580,9 @@ type testActivity struct {
 	waitCancel bool
 	heartbeat  []byte
 	owner      *testWorkflow
+	// expireAt is when the retry policy's ExpirationInterval runs out, in
+	// mock time; zero when it has none.
+	expireAt time.Time
 	// early holds a CompleteActivity call that arrived before the activity
 	// returned ErrResultPending.
 	early func()
@@ -609,15 +613,18 @@ func (w *testWorkflow) activityInfo(id, name, taskList string, attempt int32) Ac
 
 func (w *testWorkflow) ExecuteActivity(p activityParams, cb resultHandler) string {
 	a := &testActivity{id: p.activityID, params: p, cb: cb, waitCancel: p.waitForCancellation, owner: w}
+	if rp := p.retryPolicy; rp != nil && rp.ExpirationIntervalInSeconds > 0 {
+		a.expireAt = w.env.clock.now.Add(time.Duration(rp.ExpirationIntervalInSeconds) * time.Second)
+	}
 	w.activities[a.id] = a
 	if w.sessionActivity(a) {
 		return a.id
 	}
 	if lists, ok := w.env.taskLists[p.activityType]; ok && !contains(lists, p.taskList) {
-		// Nobody polls this task list, so the activity never starts.
-		w.env.clock.add(p.scheduleToStart, func() {
-			w.finishActivity(a, nil, NewTimeoutError(api.TimeoutTypeScheduleToStart), false)
-		})
+		// The activity is bound to other task lists. Fail at once, as
+		// Cadence's test environment does, so a wrong task list shows.
+		err := fmt.Errorf("unable to find activityType=%v on task list %v. It is registered on %v", p.activityType, p.taskList, lists)
+		w.env.post(func() { w.finishActivity(a, nil, err, false) })
 		return a.id
 	}
 	w.startActivity(a, 0)
@@ -747,8 +754,10 @@ func (w *testWorkflow) runActivity(a *testActivity, body func(ctx context.Contex
 				e.asyncMu.Unlock()
 				return
 			}
-			if err != nil && errors.Is(ctxErr, context.DeadlineExceeded) {
-				err = NewTimeoutError(api.TimeoutTypeStartToClose)
+			if errors.Is(ctxErr, context.DeadlineExceeded) {
+				// Past its deadline the activity timed out, whatever it
+				// returned, as on a real worker.
+				result, err = nil, NewTimeoutError(api.TimeoutTypeStartToClose)
 			}
 			deliver := func() { w.finishActivity(a, result, err, a.canceled) }
 			if delay > 0 {
@@ -773,10 +782,11 @@ func (w *testWorkflow) finishActivity(a *testActivity, result []byte, err error,
 	if a.la == nil && err != nil && !canceled && !fatal && a.params.retryPolicy != nil {
 		reason, _ := errorDetails(err, e.dc())
 		policy := a.params.retryPolicy
-		if backoff, ok := retryBackoff(policy, a.info.Attempt, reason); ok {
-			if fo != nil && fo.NextRetryIntervalSeconds > 0 {
-				backoff = int64(fo.NextRetryIntervalSeconds) * int64(time.Second)
-			}
+		var delay int64
+		if fo != nil && fo.NextRetryIntervalSeconds > 0 {
+			delay = int64(fo.NextRetryIntervalSeconds) * int64(time.Second)
+		}
+		if backoff, ok := retryBackoff(policy, a.info.Attempt, reason, e.clock.now, a.expireAt, delay); ok {
 			next := a.info.Attempt + 1
 			e.clock.add(time.Duration(backoff), func() { w.startActivity(a, next) })
 			return
@@ -794,8 +804,9 @@ func (w *testWorkflow) finishActivity(a *testActivity, result []byte, err error,
 	e.dirty = true
 }
 
-// retryBackoff mirrors the server's retry calculation, without expiration.
-func retryBackoff(p *api.RetryPolicy, attempt int32, reason string) (int64, bool) {
+// retryBackoff mirrors the server's retry calculation. A delay above zero
+// replaces the policy's backoff; the expiration still applies.
+func retryBackoff(p *api.RetryPolicy, attempt int32, reason string, now, expireAt time.Time, delay int64) (int64, bool) {
 	if p.MaximumAttempts > 0 && attempt+1 >= p.MaximumAttempts {
 		return 0, false
 	}
@@ -813,7 +824,17 @@ func retryBackoff(p *api.RetryPolicy, attempt int32, reason string) (int64, bool
 	if p.MaximumIntervalInSeconds > 0 && interval > float64(p.MaximumIntervalInSeconds) {
 		interval = float64(p.MaximumIntervalInSeconds)
 	}
-	return int64(interval * float64(time.Second)), true
+	backoff := int64(interval * float64(time.Second))
+	if interval > float64(math.MaxInt64/int64(time.Second)) {
+		backoff = math.MaxInt64 / 2
+	}
+	if delay > 0 {
+		backoff = delay
+	}
+	if !expireAt.IsZero() && now.Add(time.Duration(backoff)).After(expireAt) {
+		return 0, false
+	}
+	return backoff, true
 }
 
 func (w *testWorkflow) RequestCancelActivity(id string) {
@@ -952,10 +973,9 @@ func (w *testWorkflow) ExecuteChildWorkflow(p childParams, cb resultHandler, sta
 	}
 	exec := WorkflowExecution{ID: p.workflowID, RunID: p.workflowID + "_run"}
 	w.children[p.workflowID] = c
+	fn, ok := e.registry.getWorkflow(p.workflowType)
 	if e.hasMock(p.workflowType) {
-		fn, _ := e.registry.getWorkflow(p.workflowType)
-		ctx := w.run.root
-		rets, delay := e.callMock(p.workflowType, mockArgs(fn, ctx, p.args))
+		rets, delay := e.callMock(p.workflowType, mockArgs(fn, w.run.root, p.args))
 		if len(rets) > 0 {
 			if err, ok := rets[len(rets)-1].(error); ok && errors.Is(err, ErrMockStartChildWorkflowFailed) {
 				delete(w.children, p.workflowID)
@@ -964,14 +984,8 @@ func (w *testWorkflow) ExecuteChildWorkflow(p childParams, cb resultHandler, sta
 				return
 			}
 		}
-		started(exec, nil)
-		e.clock.add(delay, func() {
-			result, err := e.mockResult(ctx, p.workflowType, typeOf(fn), rets, p.args)
-			c.done(result, e.roundTrip(err))
-		})
-		return
+		fn, ok = e.mockedWorkflow(p.workflowType, fn, rets, delay)
 	}
-	fn, ok := e.registry.getWorkflow(p.workflowType)
 	if !ok {
 		err := fmt.Errorf("unable to find workflow type: %v. Supported types: %v", p.workflowType, e.registry.workflowNames())
 		started(WorkflowExecution{}, err)
@@ -1010,6 +1024,47 @@ func (w *testWorkflow) ExecuteChildWorkflow(p childParams, cb resultHandler, sta
 		})
 	}
 	e.dirty = true
+}
+
+// mockedWorkflow returns a workflow function with fn's signature that
+// returns the mock's results after its delay. It runs as the child
+// workflow, as in Cadence, so the delay is a workflow timer, a mock
+// function gets the child's workflow context and can block on it, and
+// canceling the child reaches it.
+func (e *testEnv) mockedWorkflow(name string, fn interface{}, rets mock.Arguments, delay time.Duration) (interface{}, bool) {
+	ft := typeOf(fn)
+	if ft == nil {
+		return nil, false
+	}
+	return reflect.MakeFunc(ft, func(in []reflect.Value) []reflect.Value {
+		ctx, _ := in[0].Interface().(Context)
+		args := make([]interface{}, 0, len(in)-1)
+		for _, v := range in[1:] {
+			args = append(args, v.Interface())
+		}
+		var result []byte
+		var err error
+		if delay > 0 {
+			err = Sleep(ctx, delay)
+		}
+		if err == nil {
+			result, err = e.mockResult(ctx, name, ft, rets, args)
+		}
+		out := []reflect.Value{reflect.Zero(errorType)}
+		if err != nil {
+			out[0] = reflect.ValueOf(&err).Elem()
+		}
+		if ft.NumOut() == 2 {
+			v := reflect.New(ft.Out(0))
+			if err == nil && result != nil {
+				if derr := e.dc().FromData(result, v.Interface()); derr != nil {
+					out[0] = reflect.ValueOf(&derr).Elem()
+				}
+			}
+			out = append([]reflect.Value{v.Elem()}, out...)
+		}
+		return out
+	}).Interface(), true
 }
 
 func (w *testWorkflow) RequestCancelChildWorkflow(_, workflowID string) {

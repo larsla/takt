@@ -866,8 +866,9 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse, taskList 
 	switch {
 	case errors.Is(err, ErrActivityResultPending):
 		return
-	case err != nil && errors.Is(ctxErr, context.DeadlineExceeded):
-		// The server times the activity out; nothing to report.
+	case errors.Is(ctxErr, context.DeadlineExceeded):
+		// The server times the activity out, whatever it returned, as in
+		// Cadence; nothing to report.
 		return
 	case err != nil && env.wasCancelRequested() && (errors.Is(err, context.Canceled) || IsCanceledError(err)):
 		var details []byte
