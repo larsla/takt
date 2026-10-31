@@ -54,10 +54,15 @@ type (
 		ReplayPartialWorkflowHistoryFromJSON(logger *zap.Logger, reader io.Reader, lastEventID int64) error
 		ReplayPartialWorkflowHistoryFromJSONFile(logger *zap.Logger, jsonfileName string, lastEventID int64) error
 		ReplayWorkflowExecution(ctx context.Context, service api.Service, logger *zap.Logger, domain string, execution sdk.WorkflowExecution) error
+		// ReplayWorkflowExecutions replays the runs a visibility query
+		// matches, for CI checks against production histories.
+		ReplayWorkflowExecutions(ctx context.Context, service api.Service, logger *zap.Logger, domain, query string, limit int) ([]ReplayResult, error)
 	}
 
 	// ReplayOptions configures a WorkflowReplayer.
 	ReplayOptions = sdk.ReplayOptions
+	// ReplayResult is the outcome of replaying one run.
+	ReplayResult = sdk.ReplayResult
 
 	// Options configures a worker.
 	Options = sdk.WorkerOptions

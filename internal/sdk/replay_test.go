@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/larsla/takt/api"
+	"github.com/larsla/takt/internal/servertest"
 )
 
 // recordHistory runs a workflow to completion and returns its history.
@@ -169,5 +171,62 @@ func TestReplayerExtras(t *testing.T) {
 	}
 	if err := r.ReplayWorkflowHistoryFromJSON(nil, strings.NewReader("not json")); err == nil {
 		t.Fatal("bad JSON replayed")
+	}
+}
+
+// changedHello runs a different activity than helloWorkflow did.
+func changedHello(ctx Context, name string) (string, error) {
+	ctx = WithActivityOptions(ctx, shortActivity)
+	var out string
+	err := ExecuteActivity(ctx, whereActivity).Get(ctx, &out)
+	return out, err
+}
+
+func TestReplayWorkflowExecutions(t *testing.T) {
+	t.Parallel()
+	e := newStackEnv(t)
+	e.worker(WorkerOptions{}, func(w *Worker) {
+		w.RegisterWorkflowWithOptions(helloWorkflow, RegisterWorkflowOptions{Name: "greeter"})
+		w.RegisterActivity(greet)
+	})
+	for _, id := range []string{"replay-q1", "replay-q2"} {
+		if err := e.run(id, "greeter", id).Get(e.ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query := "WorkflowType = 'greeter'"
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n, err := e.client.CountWorkflow(e.ctx, &api.CountWorkflowExecutionsRequest{Domain: servertest.Domain, Query: query + " AND CloseTime != missing"})
+		if err == nil && n.Count == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runs not visible: %v %v", n, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	good := NewWorkflowReplayer()
+	good.RegisterWorkflowWithOptions(helloWorkflow, RegisterWorkflowOptions{Name: "greeter"})
+	results, err := good.ReplayWorkflowExecutions(e.ctx, e.stack.Client, nil, servertest.Domain, query, 0)
+	if err != nil || len(results) != 2 {
+		t.Fatalf("results %v, err %v", results, err)
+	}
+	for _, r := range results {
+		if r.Err != nil || r.WorkflowType != "greeter" {
+			t.Fatalf("result %+v", r)
+		}
+	}
+
+	bad := NewWorkflowReplayer()
+	bad.RegisterWorkflowWithOptions(changedHello, RegisterWorkflowOptions{Name: "greeter"})
+	results, err = bad.ReplayWorkflowExecutions(e.ctx, e.stack.Client, nil, servertest.Domain, query, 1)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("results %v, err %v", results, err)
+	}
+	var nd *NonDeterministicError
+	if !errors.As(results[0].Err, &nd) || results[0].Execution.ID != "replay-q2" {
+		t.Fatalf("result %+v", results[0])
 	}
 }

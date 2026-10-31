@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/opentracing/opentracing-go"
 	"go.uber.org/zap"
@@ -185,4 +186,57 @@ func (r *WorkflowReplayer) ReplayWorkflowExecution(ctx context.Context, service 
 		return err
 	}
 	return r.ReplayWorkflowHistory(logger, &api.History{Events: events})
+}
+
+// ReplayResult is the outcome of replaying one run.
+type ReplayResult struct {
+	Execution    WorkflowExecution
+	WorkflowType string
+	// Err is nil when the run replayed cleanly. A *NonDeterministicError
+	// means the code no longer matches the history.
+	Err error
+}
+
+// ReplayWorkflowExecutions replays up to limit runs that match a
+// visibility query (as for Client.ListWorkflow), newest first, and reports
+// each. limit 0 means 100. The error is for listing; replay failures are
+// in the results. Run it in CI against production histories, in place of
+// Cadence's workflow shadower:
+//
+//	results, err := replayer.ReplayWorkflowExecutions(ctx, service, logger, "orders",
+//		"WorkflowType = 'order' AND StartTime > '2026-10-24T00:00:00Z'", 200)
+func (r *WorkflowReplayer) ReplayWorkflowExecutions(ctx context.Context, service api.Service, logger *zap.Logger, domain, query string, limit int) ([]ReplayResult, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if query != "" && !strings.Contains(strings.ToUpper(query), "ORDER BY") {
+		query += " ORDER BY StartTime DESC"
+	}
+	var results []ReplayResult
+	var token []byte
+	for len(results) < limit {
+		resp, err := service.ListWorkflowExecutions(ctx, &api.ListWorkflowExecutionsRequest{
+			Domain: domain, Query: query, PageSize: int32(min(limit-len(results), 1000)), NextPageToken: token, // #nosec G115 -- at most 1000
+		})
+		if err != nil {
+			return results, err
+		}
+		for _, info := range resp.Executions {
+			if len(results) == limit {
+				break
+			}
+			exec := WorkflowExecution{ID: info.Execution.WorkflowID, RunID: info.Execution.RunID}
+			res := ReplayResult{Execution: exec}
+			if info.Type != nil {
+				res.WorkflowType = info.Type.Name
+			}
+			res.Err = r.ReplayWorkflowExecution(ctx, service, logger, domain, exec)
+			results = append(results, res)
+		}
+		token = resp.NextPageToken
+		if len(token) == 0 {
+			break
+		}
+	}
+	return results, nil
 }
