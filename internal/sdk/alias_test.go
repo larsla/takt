@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func aliasedActivity(_ context.Context, s string) (string, error) { return "activity:" + s, nil }
@@ -63,12 +65,13 @@ func TestStartByFunctionNameFallback(t *testing.T) {
 }
 
 func TestWorkerAliasAmbiguous(t *testing.T) {
-	shareWorkflowAlias("example.com/x.Ambiguous", "a")
-	if n, ok := workerAlias("example.com/x.Ambiguous"); !ok || n != "a" {
+	fn := "example.com/x.Ambiguous" + uuid.NewString()
+	shareWorkflowAlias(fn, "a")
+	if n, ok := workerAlias(fn); !ok || n != "a" {
 		t.Fatalf("got %q %v", n, ok)
 	}
-	shareWorkflowAlias("example.com/x.Ambiguous", "b")
-	if _, ok := workerAlias("example.com/x.Ambiguous"); ok {
+	shareWorkflowAlias(fn, "b")
+	if _, ok := workerAlias(fn); ok {
 		t.Fatal("two names should not resolve")
 	}
 	if got := clientWorkflowName("plain-name"); got != "plain-name" {
