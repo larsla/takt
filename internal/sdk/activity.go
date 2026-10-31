@@ -245,6 +245,11 @@ func runActivity(ctx context.Context, fn interface{}, input []byte, dc DataConve
 	if ft.NumOut() == 1 {
 		return nil, nil
 	}
+	if v := reflect.ValueOf(out); v.Kind() == reflect.Pointer && v.IsNil() {
+		// A nil pointer is no result, as in Cadence, so Value.HasValue is
+		// false.
+		return nil, nil
+	}
 	return encodeArgs(dc, []interface{}{out})
 }
 

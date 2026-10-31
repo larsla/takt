@@ -272,7 +272,7 @@ func (r *workflowRun) invoke(ctx Context, fn interface{}, input []byte) ([]byte,
 		}
 		return nil, err
 	}
-	if len(results) == 1 {
+	if len(results) == 1 || results[0] == nil {
 		return nil, nil
 	}
 	return encodeArgs(r.env.DataConverter(), []interface{}{results[0]})
