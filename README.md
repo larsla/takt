@@ -58,6 +58,7 @@ More samples live in [examples/](examples): signals, timers, child workflows, re
 - **Activities** with retry policies, all four timeouts, heartbeats that carry progress across retries (sent for you with `EnableAutoHeartbeat`), and asynchronous completion.
 - **Cron schedules** with Cadence's overlap policies, jittered and delayed starts, and workflow-level retry policies.
 - **Sticky execution**: each worker has its own sticky task list, so a run's decision tasks come back to the worker that has it cached instead of replaying elsewhere.
+- **Sessions**: `workflow.CreateSession` pins a series of activities to one worker, with `RecreateSession` to carry it across continue-as-new.
 - **Context propagators, opentracing and workflow interceptors**, configured on `worker.Options` and `client.Options` as in Cadence.
 - **Visibility**: list and count workflows with a small query language (`WorkflowType = 'order' AND CloseTime = missing`).
 - **`testsuite`**: unit tests for workflows and activities on a mock clock, with testify mocks, the same API as `go.uber.org/cadence/testsuite`. `mocks` has testify mocks of the client interfaces, like `go.uber.org/cadence/mocks`.

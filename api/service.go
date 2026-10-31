@@ -124,6 +124,17 @@ const StickyTaskListPrefix = "__sticky:"
 // IsStickyTaskList reports whether name is a worker's sticky task list.
 func IsStickyTaskList(name string) bool { return strings.HasPrefix(name, StickyTaskListPrefix) }
 
+// SessionTaskListPrefix starts the names of session workers' own task
+// lists, where the activities of their sessions go.
+const SessionTaskListPrefix = "__session:"
+
+// IsSessionTaskList reports whether name is a session worker's task list.
+func IsSessionTaskList(name string) bool { return strings.HasPrefix(name, SessionTaskListPrefix) }
+
+// IsWorkerTaskList reports whether only one worker polls name: a sticky or
+// a session task list.
+func IsWorkerTaskList(name string) bool { return IsStickyTaskList(name) || IsSessionTaskList(name) }
+
 // TaskConsumerName is the durable consumer that serves one task list.
 func TaskConsumerName(domain, taskList string, t TaskListType) string {
 	return fmt.Sprintf("tl_%s_%s_%s", Token(domain), Token(taskList), kindToken(t))

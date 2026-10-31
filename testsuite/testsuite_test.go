@@ -627,3 +627,44 @@ func (s *UnitTestSuite) TestMockExtras() {
 	s.Equal("mocked", got)
 	s.True(ran.Load())
 }
+
+func sessionWorkflow(ctx workflow.Context) (string, error) {
+	ctx = workflow.WithActivityOptions(ctx, activityOptions)
+	so := &workflow.SessionOptions{ExecutionTimeout: 2 * time.Hour, CreationTimeout: time.Minute}
+	sctx, err := workflow.CreateSession(ctx, so)
+	if err != nil {
+		return "", err
+	}
+	var s string
+	if err := workflow.ExecuteActivity(sctx, greetActivity, "session").Get(sctx, &s); err != nil {
+		return "", err
+	}
+	// The open session must not stop the mock clock.
+	if err := workflow.Sleep(sctx, time.Hour); err != nil {
+		return "", err
+	}
+	token := workflow.GetSessionInfo(sctx).GetRecreateToken()
+	workflow.CompleteSession(sctx)
+	rctx, err := workflow.RecreateSession(ctx, token, so)
+	if err != nil {
+		return "", err
+	}
+	defer workflow.CompleteSession(rctx)
+	if workflow.GetSessionInfo(rctx).HostName == "" {
+		return "", errors.New("no host name")
+	}
+	return s, nil
+}
+
+func (s *UnitTestSuite) TestSession() {
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(sessionWorkflow)
+	env.RegisterActivity(greetActivity)
+	env.SetWorkerOptions(worker.Options{EnableSessionWorker: true})
+	env.ExecuteWorkflow(sessionWorkflow)
+	s.True(env.IsWorkflowCompleted())
+	s.NoError(env.GetWorkflowError())
+	var out string
+	s.NoError(env.GetWorkflowResult(&out))
+	s.Equal("Hello session!", out)
+}

@@ -268,7 +268,7 @@ func (e *Engine) ListTaskLists(ctx context.Context, req *api.ListTaskListsReques
 			continue
 		}
 		name, err := api.FromToken(parts[3])
-		if err != nil || api.IsStickyTaskList(name) {
+		if err != nil || api.IsWorkerTaskList(name) {
 			continue
 		}
 		t := api.TaskListTypeDecision

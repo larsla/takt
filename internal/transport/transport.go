@@ -259,7 +259,7 @@ func (c *Client) PollForActivityTask(ctx context.Context, req *api.PollForActivi
 		return nil, &api.BadRequestError{Message: "task list is not set"}
 	}
 	resp := &api.PollForActivityTaskResponse{}
-	found, err := c.poll(ctx, req.Domain, req.TaskList.Name, api.TaskListTypeActivity, req.Identity, false, func(stub api.TaskStub) error {
+	found, err := c.poll(ctx, req.Domain, req.TaskList.Name, api.TaskListTypeActivity, req.Identity, api.IsSessionTaskList(req.TaskList.Name), func(stub api.TaskStub) error {
 		r := &api.RecordActivityTaskStartedRequest{Stub: stub, Identity: req.Identity, RequestID: uuid.NewString()}
 		return c.call(ctx, api.MethodRecordActivityTaskStarted, r, resp)
 	})
@@ -270,8 +270,8 @@ func (c *Client) PollForActivityTask(ctx context.Context, req *api.PollForActivi
 }
 
 // poll fetches stubs until start accepts one, the poll times out or ctx ends.
-// Stubs the server rejects as stale are acked and dropped. A sticky task
-// list belongs to one worker, so its pollers are not recorded.
+// Stubs the server rejects as stale are acked and dropped. A sticky or
+// session task list belongs to one worker, so its pollers are not recorded.
 func (c *Client) poll(ctx context.Context, domain, taskList string, t api.TaskListType, identity string, sticky bool, start func(api.TaskStub) error) (bool, error) {
 	if !sticky {
 		c.recordPoller(ctx, domain, taskList, t, identity)
@@ -316,8 +316,8 @@ func (c *Client) poll(ctx context.Context, domain, taskList string, t api.TaskLi
 	return false, ctx.Err()
 }
 
-// stickyInactive is how long the consumer of a sticky task list outlives
-// its last poll. Its stubs expire on their own (see the engine's
+// stickyInactive is how long the consumer of a sticky or session task list
+// outlives its last poll. Its stubs expire on their own (see the engine's
 // stickyTTLMargin).
 const stickyInactive = time.Minute
 

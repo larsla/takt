@@ -98,6 +98,11 @@ func (t *tx) scheduleActivity(a *api.ScheduleActivityTaskDecisionAttributes, com
 func (t *tx) dispatchActivity(ai *ActivityInfo) {
 	at := int64(ai.Attempt)
 	t.task(api.TaskListTypeActivity, ai.TaskList, ai.ScheduleID, at)
+	if api.IsSessionTaskList(ai.TaskList) {
+		// Only the session's worker polls it; when that worker is gone the
+		// stub must not stay in the stream.
+		t.outbox[len(t.outbox)-1].TTL = seconds(max(ai.ScheduleToStart, 1)) + stickyTTLMargin
+	}
 	t.timer(TimerActivityTimeout, ai.ScheduleID, at, api.TimeoutTypeScheduleToStart,
 		ai.AttemptScheduledTime+seconds(ai.ScheduleToStart), fmt.Sprintf("a-%d-%d-s2s", ai.ScheduleID, at))
 	t.timer(TimerActivityTimeout, ai.ScheduleID, at, api.TimeoutTypeScheduleToClose,

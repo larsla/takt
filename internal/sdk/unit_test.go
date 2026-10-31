@@ -377,17 +377,9 @@ func TestWorkerOptionsValidate(t *testing.T) {
 	if (WorkerOptions{MaxConcurrentDecisionTaskPollers: 1}).Validate() == nil {
 		t.Error("one decision poller with sticky execution should fail")
 	}
-	if (WorkerOptions{EnableSessionWorker: true}).Validate() == nil {
-		t.Error("sessions should fail")
-	}
 	o := AugmentWorkerOptions(WorkerOptions{})
 	if o.MaxConcurrentActivityTaskPollers == 0 || o.Logger == nil {
 		t.Errorf("defaults missing: %+v", o)
-	}
-	w := NewWorker(&pollerService{}, "d", "tl", WorkerOptions{EnableSessionWorker: true})
-	w.RegisterActivity(greet)
-	if w.Start() == nil {
-		t.Error("Start should refuse sessions")
 	}
 }
 

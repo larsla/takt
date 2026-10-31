@@ -412,7 +412,8 @@ func (e *Engine) publish(ctx context.Context, s *State, item *OutboxItem) error 
 		msg.Data = data
 		id := fmt.Sprintf("%s-%s-%d-%d", st.RunID, st.Type, st.ScheduleID, st.Attempt)
 		if item.TTL > 0 {
-			// A sticky stub; the same task may go to the task list later.
+			// A sticky or session stub. A sticky task may go to the task list
+			// later, under its own ID.
 			id += "-sticky"
 			msg.Header.Set(jetstream.MsgTTLHeader, time.Duration(item.TTL).String())
 		}

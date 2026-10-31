@@ -56,6 +56,7 @@ Register other domains with the `DomainClient`, as with Cadence.
 
 - **Shared types have plain fields.** `.gen/go/shared` holds aliases of takt's `api` types. Cadence's Thrift structs use pointers (`WorkflowId *string`), takt's use values (`WorkflowID string`). Reading works unchanged: every struct has Cadence's nil-safe getters (`GetWorkflowId()`, `IsSetRunId()`), and the string enums have `String()` and `Ptr()`. Code that builds shared structs needs edits: drop the pointer helpers and use takt's field names, so `&shared.WorkflowExecution{WorkflowId: common.StringPtr(id)}` becomes `&shared.WorkflowExecution{WorkflowID: id}`. The compiler finds every place.
 - **Sticky execution uses a sticky task list per worker.** A worker keeps each run it handled in memory (`worker.SetStickyWorkflowCacheSize`, default 10000) and polls its own sticky task list with half its decision pollers. The server sends a run's decision tasks there. A task nobody takes within `StickyScheduleToStartTimeout` (default 5s) goes back to the normal task list, where any worker can take it and replays the history in full. A stopping worker hands its runs back right away. Queries don't use the sticky task list: whichever worker answers replays the history.
+- **Sessions work as in Cadence, with one task list per session worker.** Set `EnableSessionWorker` on the workers that should host sessions. `CreateSession` puts a creation activity on `<task list>__internal_session_creation`. A worker with a free slot (`MaxConcurrentSessionExecutionSize`, default 1000) takes it and heartbeats it for as long as the session lasts. The session's activities go to a task list only that worker polls (`__session:<uuid>@<host>`), and the web UI doesn't list those. A full worker stops taking creation tasks, so `CreateSession` waits for another worker until `CreationTimeout`, and Cadence's "too many outstanding sessions" error only happens on `RecreateSession`. If the worker dies, the session fails once `HeartbeatTimeout` (default 20s) passes. A worker that stops cleanly fails its sessions right away, so workflows don't wait out the heartbeat. As in Cadence, failure cancels the session context, and later activities in it return `ErrSessionFailed`.
 - **Workflows and activities resolve by function name too.** In Cadence, `client.StartWorkflow(ctx, opts, fn)` sends `fn`'s registered name only when `fn` was registered globally (`workflow.RegisterWithOptions`). A name given to `w.RegisterWorkflowWithOptions` on a worker stays in that worker's registry, so the client sends the Go function name, and the workflow never runs. takt resolves both ways. A client also checks workers in the same process and uses their name when they all agree on one. A worker given a type nobody registered, which is the Go function name of a workflow or activity it registered under another name, runs that function. A run started by function name keeps that name as its type in visibility.
 - **Local activities run inside the decision task.** Keep them shorter than the decision task timeout. takt does not extend the decision task while they run.
 - **`TaskListActivitiesPerSecond` is approximate.** Each worker takes an equal share of the limit and recounts the task list's workers every 10 seconds, so the total drifts while workers come and go.
@@ -82,23 +83,7 @@ These compile and do nothing, because they tune machinery takt doesn't have. Ign
 
 ## What takt leaves out, and what to do instead
 
-These Cadence features have no takt equivalent. The API is left out on purpose, so code that uses it fails to compile and you find every use before the migration instead of in production. `EnableSessionWorker` is the one exception: it exists, and `Worker.Start` fails when it is set.
-
-**Sessions** (`workflow.CreateSession`, `RecreateSession`, `CompleteSession`, `GetSessionInfo`, `EnableSessionWorker`, `client.QueryTypeOpenSessions`). Sessions pin a series of activities to one worker host, usually because they share local files. Building them means a second task routing system with its own heartbeats and failure handling, and the plain pattern below covers the use case. Give each worker host its own task list as well as the shared one, and have the first activity return it:
-
-```go
-// On each host: one worker for the shared task list, one for the host's.
-hostTaskList := "files-" + hostname
-worker.New(service, domain, "files", opts)      // registers downloadActivity
-worker.New(service, domain, hostTaskList, opts) // registers processActivity, uploadActivity
-
-// downloadActivity returns hostTaskList with its result. The workflow
-// then sends the rest of the work to that host:
-hctx := workflow.WithTaskList(ctx, result.HostTaskList)
-err := workflow.ExecuteActivity(hctx, processActivity, result.Path).Get(hctx, nil)
-```
-
-If the host dies, the pinned activities time out on `ScheduleToStartTimeout`. Retry the whole sequence from the first activity, which is what a failed session needs too.
+These Cadence features have no takt equivalent. The API is left out on purpose, so code that uses it fails to compile and you find every use before the migration instead of in production.
 
 **Schedules** (`client.ScheduleClient` and the `Schedule*` types). Cadence's schedules are a second scheduler next to cron workflows. takt's cron workflows cover the common cases: `CronSchedule` with `CronOverlapPolicy` (skip or buffer one), `JitterStart` and `FirstRunAt`. To pause, terminate the cron workflow and start it again later. To backfill, start one run per missed period with an explicit workflow ID such as `report-2026-10-30`, so it can't run twice.
 

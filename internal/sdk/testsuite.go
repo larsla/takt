@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -608,6 +610,9 @@ func (w *testWorkflow) activityInfo(id, name, taskList string, attempt int32) Ac
 func (w *testWorkflow) ExecuteActivity(p activityParams, cb resultHandler) string {
 	a := &testActivity{id: p.activityID, params: p, cb: cb, waitCancel: p.waitForCancellation, owner: w}
 	w.activities[a.id] = a
+	if w.sessionActivity(a) {
+		return a.id
+	}
 	if lists, ok := w.env.taskLists[p.activityType]; ok && !contains(lists, p.taskList) {
 		// Nobody polls this task list, so the activity never starts.
 		w.env.clock.add(p.scheduleToStart, func() {
@@ -617,6 +622,33 @@ func (w *testWorkflow) ExecuteActivity(p activityParams, cb resultHandler) strin
 	}
 	w.startActivity(a, 0)
 	return a.id
+}
+
+// sessionActivity stands in for a session worker. The creation activity
+// signals the workflow and then stays scheduled until the session ends, so
+// it doesn't hold up the mock clock the way a running activity would.
+func (w *testWorkflow) sessionActivity(a *testActivity) bool {
+	p := a.params
+	switch p.activityType {
+	case sessionCreationActivityName:
+		sessionID, _ := p.args[0].(string)
+		host, _ := os.Hostname()
+		input, err := encodeArgs(w.env.dc(), []interface{}{sessionCreationResponse{
+			Tasklist: strings.TrimSuffix(p.taskList, sessionCreationSuffix), HostName: host,
+		}})
+		w.env.post(func() {
+			if err != nil {
+				w.finishActivity(a, nil, err, false)
+				return
+			}
+			w.signal(sessionID, input)
+		})
+		return true
+	case sessionCompletionActivityName:
+		w.env.post(func() { w.finishActivity(a, nil, nil, false) })
+		return true
+	}
+	return false
 }
 
 func contains(s []string, v string) bool {

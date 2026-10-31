@@ -102,8 +102,9 @@ type WorkerOptions struct {
 	// and takt-ExecuteLocalActivity spans and carries span contexts in
 	// headers.
 	Tracer opentracing.Tracer
-	// EnableSessionWorker makes Start fail: takt doesn't support sessions.
-	// MaxConcurrentSessionExecutionSize is ignored.
+	// EnableSessionWorker makes the worker host sessions (see
+	// CreateSession), at most MaxConcurrentSessionExecutionSize at a time
+	// (default 1000).
 	EnableSessionWorker               bool
 	MaxConcurrentSessionExecutionSize int
 	// FeatureFlags and WorkerBugPorts are accepted for compatibility and
@@ -141,11 +142,8 @@ type WorkerBugPorts struct {
 
 // Validate reports options that a worker can't run with.
 func (o WorkerOptions) Validate() error {
-	switch {
-	case !o.DisableStickyExecution && o.MaxConcurrentDecisionTaskPollers == 1:
+	if !o.DisableStickyExecution && o.MaxConcurrentDecisionTaskPollers == 1 {
 		return errors.New("DecisionTaskPollers must be >= 2 or use default value")
-	case o.EnableSessionWorker:
-		return errors.New("sessions are not supported by takt: EnableSessionWorker must be false")
 	}
 	return nil
 }
@@ -223,6 +221,8 @@ type Worker struct {
 	// server sends decision tasks of runs it has cached. Empty when sticky
 	// execution is off.
 	stickyTaskList string
+	// session hosts sessions; nil unless EnableSessionWorker is set.
+	session *sessionWorker
 	// props are the context propagators, the tracing one included.
 	props []ContextPropagator
 	// raw is the service as given; service records metrics around it.
@@ -256,6 +256,9 @@ func NewWorker(service api.Service, domain, taskList string, options WorkerOptio
 		activityScope: tagged(scope, tagWorkerType, workerTypeActivity),
 	}
 	w.shareAliases = true
+	if options.EnableSessionWorker {
+		w.session = newSessionWorker(taskList, options.MaxConcurrentSessionExecutionSize)
+	}
 	if !options.DisableStickyExecution {
 		w.cache = newStickyCache(int(stickyCacheSize.Load()))
 		w.cache.scope = w.decisionScope
@@ -333,9 +336,6 @@ func (w *Worker) Start() error {
 	if w.domain == "" || w.taskList == "" {
 		return errors.New("worker needs a domain and a task list")
 	}
-	if w.opts.EnableSessionWorker {
-		return errors.New("sessions are not supported by takt: EnableSessionWorker must be false")
-	}
 	workflows, activities := w.workflowNames(), w.activityNames()
 	if len(workflows) == 0 && len(activities) == 0 {
 		return errors.New("worker has no workflows or activities registered")
@@ -366,7 +366,7 @@ func (w *Worker) Start() error {
 			w.queryStop = stop
 		}
 	}
-	if !w.opts.DisableActivityWorker && len(activities) > 0 {
+	if !w.opts.DisableActivityWorker && (len(activities) > 0 || w.session != nil) {
 		sem := make(chan struct{}, w.opts.MaxConcurrentActivityExecutionSize)
 		lim := limiter(w.opts.WorkerActivitiesPerSecond)
 		tlLim := limiter(w.opts.TaskListActivitiesPerSecond)
@@ -376,7 +376,15 @@ func (w *Worker) Start() error {
 		w.activityScope.Counter(MetricWorkerStart).Inc(1)
 		for range w.opts.MaxConcurrentActivityTaskPollers {
 			w.activityScope.Counter(MetricPollerStart).Inc(1)
-			w.wg.Go(func() { w.pollLoop(sem, w.pollActivity, lim, tlLim) })
+			w.wg.Go(func() { w.pollLoop(sem, func() (func(), error) { return w.pollActivity(w.taskList) }, lim, tlLim) })
+		}
+		if s := w.session; s != nil {
+			// A creation poller holds a session slot from before it polls
+			// until the session ends, so a full worker takes no new sessions.
+			for range w.opts.MaxConcurrentActivityTaskPollers {
+				w.wg.Go(func() { w.pollLoop(s.slots, func() (func(), error) { return w.pollActivity(s.creationTaskList) }) })
+				w.wg.Go(func() { w.pollLoop(sem, func() (func(), error) { return w.pollActivity(s.taskList) }, lim) })
+			}
 		}
 	}
 	w.logger.Info("Started Worker", zap.Strings("workflows", workflows), zap.Strings("activities", activities))
@@ -510,10 +518,10 @@ func (w *Worker) pollDecision(tl *api.TaskList) (func(), error) {
 	return func() { w.handleDecision(task) }, nil
 }
 
-func (w *Worker) pollActivity() (func(), error) {
+func (w *Worker) pollActivity(taskList string) (func(), error) {
 	start := time.Now()
 	task, err := w.service.PollForActivityTask(w.ctx, &api.PollForActivityTaskRequest{
-		Domain: w.domain, TaskList: &api.TaskList{Name: w.taskList}, Identity: w.opts.Identity,
+		Domain: w.domain, TaskList: &api.TaskList{Name: taskList}, Identity: w.opts.Identity,
 	})
 	gotTask := err == nil && len(task.TaskToken) > 0
 	if w.ctx.Err() == nil {
@@ -527,7 +535,7 @@ func (w *Worker) pollActivity() (func(), error) {
 		tagged(w.activityScope, tagActivityType, task.ActivityType.Name).Timer(MetricActivityScheduledToStart).
 			Record(time.Duration(task.StartedTimestamp - task.ScheduledTimestampOfThisAttempt))
 	}
-	return func() { w.handleActivity(task) }, nil
+	return func() { w.handleActivity(task, taskList) }, nil
 }
 
 // fullHistory fetches the remaining pages of a history.
@@ -764,7 +772,7 @@ func (w *Worker) handleQuery(ctx context.Context, req *api.WorkerQueryRequest) *
 	return &api.WorkerQueryResponse{Result: result}
 }
 
-func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
+func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse, taskList string) {
 	name := task.ActivityType.Name
 	logger := w.logger.With(zap.String("ActivityType", name), zap.String("ActivityID", task.ActivityID),
 		zap.String("WorkflowID", task.WorkflowExecution.WorkflowID), zap.String("RunID", task.WorkflowExecution.RunID))
@@ -782,7 +790,7 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 			WorkflowExecution:  WorkflowExecution{ID: task.WorkflowExecution.WorkflowID, RunID: task.WorkflowExecution.RunID},
 			ActivityID:         task.ActivityID,
 			ActivityType:       ActivityType{Name: name},
-			TaskList:           w.taskList,
+			TaskList:           taskList,
 			HeartbeatTimeout:   time.Duration(task.HeartbeatTimeoutSeconds) * time.Second,
 			ScheduledTimestamp: scheduled,
 			StartedTimestamp:   started,
@@ -817,6 +825,9 @@ func (w *Worker) handleActivity(task *api.PollForActivityTaskResponse) {
 	var result []byte
 	execStart := time.Now()
 	fn, ok := w.getActivity(name)
+	if s := w.session; s != nil && !ok {
+		fn, ok = s.activity(name, taskList == s.creationTaskList)
+	}
 	pctx, err := extractHeader(ctx, w.props, task.Header)
 	switch {
 	case err != nil:

@@ -61,6 +61,8 @@ const (
 	QueryTypeStackTrace = sdk.QueryTypeStackTrace
 	// QueryTypeQueryTypes returns the query types a workflow answers.
 	QueryTypeQueryTypes = sdk.QueryTypeQueryTypes
+	// QueryTypeOpenSessions returns a workflow's open sessions.
+	QueryTypeOpenSessions = sdk.QueryTypeOpenSessions
 
 	QueryConsistencyLevelUnspecified = sdk.QueryConsistencyLevelUnspecified
 	QueryConsistencyLevelEventual    = sdk.QueryConsistencyLevelEventual

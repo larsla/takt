@@ -189,6 +189,8 @@ type workflowRun struct {
 	cancel  CancelFunc
 	signals map[string]*channelImpl
 	queries map[string]interface{}
+	// sessions are the open sessions, for QueryTypeOpenSessions.
+	sessions map[string]*SessionInfo
 }
 
 func newWorkflowRun(env workflowEnvironment, fn interface{}, input []byte) *workflowRun {
@@ -197,6 +199,8 @@ func newWorkflowRun(env workflowEnvironment, fn interface{}, input []byte) *work
 		d:       newDispatcher(),
 		signals: map[string]*channelImpl{},
 		queries: map[string]interface{}{},
+
+		sessions: map[string]*SessionInfo{},
 	}
 	ctx := WithValue(background, workflowEnvKey, env)
 	ctx = WithValue(ctx, workflowRunKey, r)
@@ -305,6 +309,8 @@ func (r *workflowRun) query(queryType string, args []byte) ([]byte, error) {
 		return encodeArgs(r.env.DataConverter(), []interface{}{r.d.stackTrace()})
 	case QueryTypeQueryTypes:
 		return encodeArgs(r.env.DataConverter(), []interface{}{r.queryTypes()})
+	case QueryTypeOpenSessions:
+		return encodeArgs(r.env.DataConverter(), []interface{}{r.openSessions()})
 	}
 	h, ok := r.queries[queryType]
 	if !ok {
@@ -444,6 +450,10 @@ func activityParamsFrom(ctx Context, env workflowEnvironment, activity interface
 	if tl == "" {
 		tl = env.WorkflowInfo().TaskListName
 	}
+	activityType := env.Registry().activityName(activity)
+	if tl, err = sessionTaskList(ctx, activityType, tl); err != nil {
+		return activityParams{}, err
+	}
 	header, err := workflowHeader(ctx)
 	if err != nil {
 		return activityParams{}, err
@@ -455,7 +465,7 @@ func activityParamsFrom(ctx Context, env workflowEnvironment, activity interface
 	return activityParams{
 		header:              header,
 		activityID:          id,
-		activityType:        env.Registry().activityName(activity),
+		activityType:        activityType,
 		taskList:            tl,
 		input:               input,
 		scheduleToClose:     s2c,
@@ -821,7 +831,7 @@ func validateVersion(changeID string, version, minSupported, maxSupported Versio
 // SetQueryHandler registers a handler for queryType. The handler takes the
 // query arguments and returns (result, error).
 func setQueryHandler(ctx Context, queryType string, handler interface{}) error {
-	if queryType == QueryTypeStackTrace || queryType == QueryTypeQueryTypes {
+	if queryType == QueryTypeStackTrace || queryType == QueryTypeQueryTypes || queryType == QueryTypeOpenSessions {
 		return fmt.Errorf("queryType %s is reserved", queryType)
 	}
 	t := reflect.TypeOf(handler)
