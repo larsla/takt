@@ -255,6 +255,7 @@ func NewWorker(service api.Service, domain, taskList string, options WorkerOptio
 		decisionScope: tagged(scope, tagWorkerType, workerTypeDecision),
 		activityScope: tagged(scope, tagWorkerType, workerTypeActivity),
 	}
+	w.shareAliases = true
 	if !options.DisableStickyExecution {
 		w.cache = newStickyCache(int(stickyCacheSize.Load()))
 		w.cache.scope = w.decisionScope

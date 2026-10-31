@@ -232,7 +232,7 @@ func (c *workflowClient) startRequest(ctx context.Context, spanPrefix string, op
 	req := &api.StartWorkflowExecutionRequest{
 		Domain:                              c.domain,
 		WorkflowID:                          id,
-		WorkflowType:                        &api.WorkflowType{Name: globalRegistry.workflowName(workflow)},
+		WorkflowType:                        &api.WorkflowType{Name: clientWorkflowName(workflow)},
 		TaskList:                            &api.TaskList{Name: options.TaskList},
 		Input:                               input,
 		ExecutionStartToCloseTimeoutSeconds: durationSeconds(options.ExecutionStartToCloseTimeout),

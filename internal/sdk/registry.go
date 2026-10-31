@@ -45,6 +45,10 @@ type registry struct {
 	// EnableAutoHeartbeat.
 	autoHeartbeat map[string]bool
 	parent        *registry
+	// shareAliases publishes workflow aliases to workerAliases, so a client
+	// in the same process can start a workflow by function value when only
+	// a worker registered it under another name.
+	shareAliases bool
 }
 
 func newRegistry(parent *registry) *registry {
@@ -59,6 +63,56 @@ func newRegistry(parent *registry) *registry {
 }
 
 var globalRegistry = newRegistry(nil)
+
+// workerAliases maps a workflow function's name to the names workers in
+// this process registered it under, its own name included, so a function
+// registered under two names resolves to neither.
+var workerAliases = struct {
+	sync.Mutex
+	names map[string]map[string]bool
+}{names: map[string]map[string]bool{}}
+
+func shareWorkflowAlias(fnName, name string) {
+	workerAliases.Lock()
+	defer workerAliases.Unlock()
+	if workerAliases.names[fnName] == nil {
+		workerAliases.names[fnName] = map[string]bool{}
+	}
+	workerAliases.names[fnName][name] = true
+}
+
+// workerAlias returns the name workers registered the workflow function
+// fnName under, when they all used the same one.
+func workerAlias(fnName string) (string, bool) {
+	workerAliases.Lock()
+	defer workerAliases.Unlock()
+	names := workerAliases.names[fnName]
+	if len(names) != 1 {
+		return "", false
+	}
+	for n := range names {
+		return n, true
+	}
+	return "", false
+}
+
+// clientWorkflowName resolves the workflow a client starts. Like Cadence it
+// looks at the global registry, then at what workers in this process
+// registered, so StartWorkflow(ctx, opts, fn) finds a worker's
+// RegisterWorkflowWithOptions(fn, {Name: ...}).
+func clientWorkflowName(wf interface{}) string {
+	name := getFunctionName(wf)
+	if _, isString := wf.(string); isString {
+		return name
+	}
+	if a, ok := globalRegistry.alias(name, false); ok {
+		return a
+	}
+	if a, ok := workerAlias(name); ok {
+		return a
+	}
+	return name
+}
 
 // getFunctionName returns the name Cadence would register fn under.
 func getFunctionName(fn interface{}) string {
@@ -136,6 +190,9 @@ func (r *registry) RegisterWorkflowWithOptions(fn interface{}, opts RegisterWork
 	r.workflows[name] = fn
 	if name != fnName {
 		r.workflowAlias[fnName] = name
+	}
+	if r.shareAliases {
+		shareWorkflowAlias(fnName, name)
 	}
 }
 
@@ -219,36 +276,73 @@ func (r *registry) addActivity(name, fnName string, fn interface{}, opts Registe
 	return nil
 }
 
+// getWorkflow finds the workflow registered as name. When there is none
+// and name is the function name of a workflow registered under another
+// name, it returns that workflow: a client that didn't know the alias
+// started it by function value.
 func (r *registry) getWorkflow(name string) (interface{}, bool) {
+	if fn, ok := r.lookupWorkflow(name); ok {
+		return fn, true
+	}
+	if a, ok := r.alias(name, false); ok {
+		return r.lookupWorkflow(a)
+	}
+	return nil, false
+}
+
+func (r *registry) lookupWorkflow(name string) (interface{}, bool) {
 	r.mu.RLock()
 	fn, ok := r.workflows[name]
 	r.mu.RUnlock()
 	if !ok && r.parent != nil {
-		return r.parent.getWorkflow(name)
+		return r.parent.lookupWorkflow(name)
 	}
 	return fn, ok
 }
 
+// getActivity finds the activity registered as name, falling back to an
+// activity whose function name is name, as getWorkflow does.
 func (r *registry) getActivity(name string) (interface{}, bool) {
+	if fn, ok := r.lookupActivity(name); ok {
+		return fn, true
+	}
+	if a, ok := r.alias(name, true); ok {
+		return r.lookupActivity(a)
+	}
+	return nil, false
+}
+
+func (r *registry) lookupActivity(name string) (interface{}, bool) {
 	r.mu.RLock()
 	fn, ok := r.activities[name]
 	r.mu.RUnlock()
 	if !ok && r.parent != nil {
-		return r.parent.getActivity(name)
+		return r.parent.lookupActivity(name)
 	}
 	return fn, ok
 }
 
-// isAutoHeartbeat reports whether an activity type was registered with
-// EnableAutoHeartbeat.
+// isAutoHeartbeat reports whether an activity type, or the activity whose
+// function name it is, was registered with EnableAutoHeartbeat.
 func (r *registry) isAutoHeartbeat(name string) bool {
+	if auto, ok := r.autoHeartbeatOf(name); ok {
+		return auto
+	}
+	if a, ok := r.alias(name, true); ok {
+		auto, _ := r.autoHeartbeatOf(a)
+		return auto
+	}
+	return false
+}
+
+func (r *registry) autoHeartbeatOf(name string) (bool, bool) {
 	r.mu.RLock()
 	auto, ok := r.autoHeartbeat[name]
 	r.mu.RUnlock()
 	if !ok && r.parent != nil {
-		return r.parent.isAutoHeartbeat(name)
+		auto, ok = r.parent.autoHeartbeatOf(name)
 	}
-	return auto
+	return auto, ok
 }
 
 func (r *registry) alias(fnName string, activity bool) (string, bool) {
