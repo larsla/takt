@@ -39,3 +39,14 @@ func TestClientMock(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Mocks work as zero values, as Cadence's do, for helpers that build them
+// without a *testing.T.
+func TestZeroValueMock(t *testing.T) {
+	c := &mocks.Client{}
+	c.On("TerminateWorkflow", mock.Anything, "wf-1", "", "done", []byte(nil)).Return(nil)
+	if err := c.TerminateWorkflow(context.Background(), "wf-1", "", "done", nil); err != nil {
+		t.Fatal(err)
+	}
+	c.AssertExpectations(t)
+}
