@@ -23,6 +23,8 @@ grep -rl 'go.uber.org/cadence' --include='*.go' . | xargs sed -i \
 | `go.uber.org/cadence/interceptors` | `github.com/larsla/takt/interceptors` |
 | `go.uber.org/cadence/mocks` | `github.com/larsla/takt/mocks` |
 
+`mocks` exists from takt v0.0.2. Like Cadence's, its mocks work as zero values (`&mocks.Client{}`, then `AssertExpectations(t)`), so shared helpers don't need a `*testing.T`. `mocks.NewClient(t)` also registers the assertion with `t.Cleanup`.
+
 Logging stays on `go.uber.org/zap` and metrics on `github.com/uber-go/tally`, so loggers and scopes you pass in today keep working. Metric names start with `takt-` instead of `cadence-`; [metrics.md](metrics.md) lists them.
 
 ## 2. Replace the service client
@@ -50,7 +52,7 @@ w := worker.New(service, "my-domain", "my-task-list", worker.Options{})
 
 `takt dev` starts NATS (embedded), the takt server and the web UI, and registers a `default` domain. In production, run `takt server --nats-url nats://...` against a NATS cluster with JetStream. Several `takt server` processes can share one NATS cluster.
 
-Register other domains with the `DomainClient`, as with Cadence.
+Register other domains with the `DomainClient`, as with Cadence. [operations.md](operations.md) covers how tasks reach workers when none is polling, scaling, and rotating NATS credentials.
 
 ## What behaves differently
 
@@ -66,7 +68,7 @@ Register other domains with the `DomainClient`, as with Cadence.
 - **`GetTotalHistoryBytes` is an estimate.** The worker adds up the JSON size of the events it saw. Use it the way you use Cadence's, as a signal to continue as new.
 - **The testsuite reruns cron workflows right away.** With `SetWorkflowCronSchedule`, each run starts as soon as the previous one closes, on the same mock clock, as in Cadence's test environment. Set `SetWorkflowCronMaxIterations`, or the test runs forever.
 - **Visibility queries support a subset.** `ListWorkflow` and `CountWorkflow` accept comparisons (`=`, `!=`, `<`, `<=`, `>`, `>=`) joined with `AND`, `OR` and parentheses, plus `ORDER BY`. Fields are `WorkflowID`, `RunID`, `WorkflowType`, `TaskList`, `CloseStatus`, `StartTime`, `CloseTime`, `ExecutionTime` and custom search attributes; `CloseTime = missing` selects open runs. Each server answers from an in-memory index, so there is no Elasticsearch and no full-text search.
-- **Running workflows don't move.** Start new runs on takt and let old ones finish on Cadence. takt's history JSON uses Cadence's field names, so `worker.ReplayWorkflowHistoryFromJSONFile` can read files exported with `cadence workflow show --output_filename`. Replaying them can still fail where takt's SDK generates IDs or encodes markers (side effects, versions, local activities) differently from Cadence's.
+- **Running workflows don't move.** Start new runs on takt and let old ones finish on Cadence. [Running both engines](#running-cadence-and-takt-side-by-side) says how. takt's history JSON uses Cadence's field names, so `worker.ReplayWorkflowHistoryFromJSONFile` can read files exported with `cadence workflow show --output_filename`. Replaying them can still fail where takt's SDK generates IDs or encodes markers (side effects, versions, local activities) differently from Cadence's.
 
 ### Options takt accepts and ignores
 
@@ -81,6 +83,22 @@ These compile and do nothing, because they tune machinery takt doesn't have. Ign
 | `workflow.Type.Path`, `activity.Type.Path` | Informational in Cadence too. |
 | `worker.EnableVerboseLogging` | Use the zap logger's level instead. |
 
+## Running Cadence and takt side by side
+
+An open Cadence run can't move to takt: its state is its history, and only Cadence can keep executing that history. So the cut-over runs both engines until the Cadence runs have closed.
+
+1. **Keep the Cadence build running.** Deploy the takt build of a service next to its last Cadence build. The two can't share a binary, because the SDKs' `workflow.Context` types differ. The Cadence workers keep polling until nothing is open there.
+2. **Start new runs on takt.** Switch every `StartWorkflow`, `ExecuteWorkflow` and `SignalWithStartWorkflow` call to the takt client.
+3. **Route calls on existing runs.** Signals, queries, cancels and describes go to the engine that has the run. A small wrapper around both clients is enough: try takt, and on `*shared.EntityNotExistsError` call Cadence. If workflow IDs must stay unique across both engines, also check Cadence before a start, because neither engine knows about the other's runs.
+4. **Children stay with their parent.** A child starts on the engine that runs its parent's worker. A Cadence parent finishes its children on Cadence. `SignalExternalWorkflow` can't cross engines either. Where a workflow on one engine must signal a run on the other, do it from an activity that uses the other engine's client.
+5. **Move cron workflows between fire times.** Terminate the Cadence cron run, then start it on takt with the same schedule, and `FirstRunAt` set to the next fire time if a skipped fire matters.
+6. **Hand off long-running workflows at continue-as-new.** For a workflow that loops with `ContinueAsNew`, deploy a last Cadence version that, in place of `ContinueAsNew`, runs an activity that starts the next run on takt with the same arguments, then completes. The loop carries on, on takt.
+7. **Drain.** When Cadence's `ListOpenWorkflow` for the domain is empty, shut down the Cadence workers.
+
+A tool that copies open Cadence runs to takt would have to carry each run's state across, and that state lives in the history and the workflow code, so there's no general way to do it. The continue-as-new hand-off is the general form of that: the workflow decides what state the next run needs.
+
+takt has no mode for replaying Cadence histories with Cadence's IDs and marker encoding. Under this procedure no takt worker ever executes a Cadence history, so such a mode would only test the replayer, not anything that runs in production. The import rewrite doesn't change workflow logic. Keep replaying Cadence histories with Cadence's replayer in the Cadence build for as long as that build changes, and replay takt's own histories in the takt build, as described under the workflow shadower below.
+
 ## What takt leaves out, and what to do instead
 
 These Cadence features have no takt equivalent. The API is left out on purpose, so code that uses it fails to compile and you find every use before the migration instead of in production.
@@ -93,7 +111,31 @@ These Cadence features have no takt equivalent. The API is left out on purpose, 
 
 **Cross-cluster and active-active domains** (`DomainClient.Failover`, `StartWorkflowOptions.ActiveClusterSelectionPolicy`, `ClusterAttribute`, global domains). takt runs as one logical cluster. For availability, run it against a NATS cluster spread across zones and start `takt server` with `--replicas 3`, so every stream and bucket has three copies. Across regions, use a NATS supercluster.
 
-**The workflow shadower** (`worker.NewWorkflowShadower`, `ShadowOptions`, `EnableShadowWorker`). The shadower replays production histories against new code before a deploy. A CI job does the same with less machinery: list recent runs with `Client.ListWorkflow`, then replay each with `worker.ReplayWorkflowExecution` (or replay exported files with `WorkflowReplayer.ReplayWorkflowHistoryFromJSONFile`). A nondeterministic change comes back as a `*takt.NonDeterministicError`.
+**The workflow shadower** (`worker.NewWorkflowShadower`, `ShadowOptions`, `EnableShadowWorker`). The shadower replays production histories against new code before a deploy. A Go test in CI does the same with less machinery. `ReplayWorkflowExecutions` lists the runs a visibility query matches, newest first, and replays each:
+
+```go
+func TestReplayProduction(t *testing.T) {
+	service, closeFn, err := takt.Dial(os.Getenv("TAKT_NATS_URL"), nil)
+	if err != nil {
+		t.Skip("no takt cluster:", err)
+	}
+	defer closeFn()
+	r := worker.NewWorkflowReplayer()
+	r.RegisterWorkflow(OrderWorkflow) // register as your workers do
+	results, err := r.ReplayWorkflowExecutions(context.Background(), service, nil, "orders",
+		"StartTime > '"+time.Now().Add(-7*24*time.Hour).Format(time.RFC3339)+"'", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, res := range results {
+		if res.Err != nil {
+			t.Errorf("%s %s (%s): %v", res.Execution.ID, res.Execution.RunID, res.WorkflowType, res.Err)
+		}
+	}
+}
+```
+
+A nondeterministic change comes back as a `*takt.NonDeterministicError`. This has to be a program or test of yours rather than a `takt replay` command, because the replay runs your workflow code. To replay exported files instead, use `WorkflowReplayer.ReplayWorkflowHistoryFromJSONFile`.
 
 **Authorization providers** (`worker.NewAdminJwtAuthorizationProvider`, `NewOAuthAuthorizationProvider`, `Options.Authorization`). takt clients talk to NATS, so NATS does the authentication and authorization. Pass a credentials file, nkey or JWT to `takt.Dial` as a `nats.Option` (`nats.UserCredentials("svc.creds")`), use TLS, and limit each service's account to the subjects it needs.
 

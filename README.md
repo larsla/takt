@@ -62,7 +62,7 @@ More samples live in [examples/](examples): signals, timers, child workflows, re
 - **Context propagators, opentracing and workflow interceptors**, configured on `worker.Options` and `client.Options` as in Cadence.
 - **Visibility**: list and count workflows with a small query language (`WorkflowType = 'order' AND CloseTime = missing`).
 - **`testsuite`**: unit tests for workflows and activities on a mock clock, with testify mocks, the same API as `go.uber.org/cadence/testsuite`. `mocks` has testify mocks of the client interfaces, like `go.uber.org/cadence/mocks`.
-- **Replay tool**: `worker.NewWorkflowReplayer` checks recorded histories against changed code.
+- **Replay tool**: `worker.NewWorkflowReplayer` checks recorded histories against changed code, and `ReplayWorkflowExecutions` replays the runs a visibility query matches, for a CI check against production.
 - **Web UI**: workflow lists, a live event timeline, pending activities, stack traces, queries, task list pollers and backlog, cron workflows, and signal/cancel/terminate actions.
 - **CLI**: `takt domain ...` and `takt workflow start|list|show|describe|signal|query|cancel|terminate`, with Cadence's flag names.
 
@@ -116,7 +116,7 @@ Pods run as non-root with a read-only root filesystem. [values.yaml](charts/takt
 
 ### Metrics
 
-`--metrics-addr` serves Prometheus metrics. Server and SDK metrics use Cadence's names with a `takt` prefix, so Cadence dashboards carry over with a find-and-replace. [docs/metrics.md](docs/metrics.md) lists them.
+`--metrics-addr` serves Prometheus metrics. Server and SDK metrics use Cadence's names with a `takt` prefix, so Cadence dashboards carry over with a find-and-replace. [docs/metrics.md](docs/metrics.md) lists them. [docs/operations.md](docs/operations.md) covers task delivery, scaling and credentials.
 
 ## Releases
 
