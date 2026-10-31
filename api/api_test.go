@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -116,5 +117,38 @@ func TestGetters(t *testing.T) {
 	child := &PendingChildExecutionInfo{WorkflowTypeName: "t"}
 	if child.GetWorkflowTypName() != "t" {
 		t.Fatal("Cadence's misspelled getter")
+	}
+}
+
+func TestCronOverlapPolicyJSON(t *testing.T) {
+	for in, want := range map[string]CronOverlapPolicy{
+		`""`: "", `"SKIPPED"`: CronOverlapPolicySkipped, `0`: CronOverlapPolicySkipped,
+		`1`: CronOverlapPolicyBufferone, `"BUFFERONE"`: CronOverlapPolicyBufferone, `"BUFFER_ONE"`: CronOverlapPolicyBufferone,
+	} {
+		var got CronOverlapPolicy
+		if err := json.Unmarshal([]byte(in), &got); err != nil || got != want {
+			t.Errorf("%s: got %q, err %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{`2`, `"LATER"`, `{}`} {
+		var got CronOverlapPolicy
+		if json.Unmarshal([]byte(bad), &got) == nil {
+			t.Errorf("%s should not decode", bad)
+		}
+	}
+	var o struct{ P CronOverlapPolicy }
+	if err := json.Unmarshal([]byte(`{"P":1}`), &o); err != nil || o.P != CronOverlapPolicyBufferone {
+		t.Errorf("in a struct: %q %v", o.P, err)
+	}
+}
+
+func TestTimesOrZero(t *testing.T) {
+	var nilInfo *WorkflowExecutionInfo
+	if !nilInfo.CloseTimeOrZero().IsZero() || !nilInfo.StartTimeOrZero().IsZero() {
+		t.Error("nil info")
+	}
+	info := &WorkflowExecutionInfo{StartTime: 1e9}
+	if info.StartTimeOrZero().Unix() != 1 || !info.CloseTimeOrZero().IsZero() {
+		t.Errorf("times %v %v", info.StartTimeOrZero(), info.CloseTimeOrZero())
 	}
 }

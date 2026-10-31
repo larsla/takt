@@ -3,6 +3,12 @@
 // from Cadence decode here too.
 package api
 
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+)
+
 // EventType identifies a history event.
 type EventType string
 
@@ -235,3 +241,27 @@ const (
 	DomainStatusRegistered DomainStatus = "REGISTERED"
 	DomainStatusDeprecated DomainStatus = "DEPRECATED"
 )
+
+// UnmarshalJSON also reads Cadence's forms of the policy: the numbers 0
+// (skipped) and 1 (buffer one), and the name "BUFFERONE".
+func (p *CronOverlapPolicy) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		var n int
+		if json.Unmarshal(data, &n) != nil {
+			return fmt.Errorf("invalid cron overlap policy %s", data)
+		}
+		s = strconv.Itoa(n)
+	}
+	switch s {
+	case "":
+		*p = ""
+	case "0", string(CronOverlapPolicySkipped):
+		*p = CronOverlapPolicySkipped
+	case "1", "BUFFERONE", string(CronOverlapPolicyBufferone):
+		*p = CronOverlapPolicyBufferone
+	default:
+		return fmt.Errorf("unknown cron overlap policy %q", s)
+	}
+	return nil
+}
