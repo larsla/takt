@@ -42,6 +42,10 @@ type State struct {
 
 	Decision        *DecisionInfo `json:"decision,omitempty"`
 	DecisionAttempt int64         `json:"decisionAttempt,omitempty"`
+	// LastDecisionFailure is why the last decision task failed or timed
+	// out, while decisions keep failing. Describe shows it, so a run no
+	// worker can execute doesn't look healthy.
+	LastDecisionFailure *DecisionFailure `json:"lastDecisionFailure,omitempty"`
 	// LastDecisionStartedID is the started event of the last completed decision.
 	LastDecisionStartedID int64 `json:"lastDecisionStartedId,omitempty"`
 	// StickyTaskList is the task list of the worker that has the run
@@ -264,4 +268,12 @@ func runKey(domain, workflowID, runID string) string {
 
 func currentKey(domain, workflowID string) string {
 	return api.Token(domain) + "." + api.Token(workflowID) + ".current"
+}
+
+// DecisionFailure records a failed or timed out decision task.
+type DecisionFailure struct {
+	Cause    string `json:"cause"`
+	Details  []byte `json:"details,omitempty"`
+	Identity string `json:"identity,omitempty"`
+	Time     int64  `json:"time"`
 }

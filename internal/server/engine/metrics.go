@@ -20,6 +20,7 @@ const (
 	MetricWorkflowContinuedAsNew = "takt_workflow_continued_as_new"
 	MetricHistoryCount           = "takt_history_count"
 	MetricDecisionTimeout        = "takt_decision_timeout"
+	MetricDecisionFailed         = "takt_decision_failed"
 	MetricActivityTimeout        = "takt_activity_timeout"
 	MetricTaskRequests           = "takt_task_requests"
 	MetricTaskErrors             = "takt_task_errors"
@@ -69,6 +70,9 @@ func (e *Engine) emitEvents(s *State, events []*api.HistoryEvent) {
 			scope.Counter(MetricWorkflowStarted).Inc(1)
 		case api.EventTypeDecisionTaskTimedOut:
 			scope.Counter(MetricDecisionTimeout).Inc(1)
+		case api.EventTypeDecisionTaskFailed:
+			scope.Tagged(map[string]string{"cause": string(ev.DecisionTaskFailedEventAttributes.Cause)}).
+				Counter(MetricDecisionFailed).Inc(1)
 		case api.EventTypeActivityTaskTimedOut:
 			scope.Tagged(map[string]string{"timeout_type": string(ev.ActivityTaskTimedOutEventAttributes.TimeoutType)}).
 				Counter(MetricActivityTimeout).Inc(1)

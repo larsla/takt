@@ -208,6 +208,12 @@ type PendingDecisionInfo struct {
 	StartedTimestamp           int64                `json:"startedTimestamp,omitempty"`
 	Attempt                    int64                `json:"attempt,omitempty"`
 	OriginalScheduledTimestamp int64                `json:"originalScheduledTimestamp,omitempty"`
+	// takt only: why the previous attempts failed. A run whose workflow
+	// type no worker has registered shows the worker's error here.
+	LastFailureCause     string `json:"lastFailureCause,omitempty"`
+	LastFailureDetails   []byte `json:"lastFailureDetails,omitempty"`
+	LastFailureIdentity  string `json:"lastFailureIdentity,omitempty"`
+	LastFailureTimestamp int64  `json:"lastFailureTimestamp,omitempty"`
 }
 
 type DescribeWorkflowExecutionResponse struct {

@@ -84,6 +84,13 @@ func (e *Engine) DescribeWorkflowExecution(ctx context.Context, req *api.Describ
 			pd.StartedTimestamp = d.StartedTime
 		}
 		resp.PendingDecision = pd
+	} else if s.LastDecisionFailure != nil && s.Running() {
+		resp.PendingDecision = &api.PendingDecisionInfo{State: api.PendingDecisionStateBackoff, Attempt: s.DecisionAttempt}
+	}
+	if f := s.LastDecisionFailure; f != nil && resp.PendingDecision != nil {
+		pd := resp.PendingDecision
+		pd.LastFailureCause, pd.LastFailureDetails = f.Cause, f.Details
+		pd.LastFailureIdentity, pd.LastFailureTimestamp = f.Identity, f.Time
 	}
 	return resp, nil
 }

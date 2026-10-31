@@ -114,9 +114,12 @@ type Workflow struct {
 	Activities []Activity
 	Children   []Child
 	Decision   string
-	Events     []Event
-	CanWrite   bool
-	Error      string
+	// DecisionFailure is set while decision tasks keep failing: the
+	// worker's error, such as an unregistered workflow type.
+	DecisionFailure string
+	Events          []Event
+	CanWrite        bool
+	Error           string
 }
 
 // TaskList is one task list row.

@@ -69,6 +69,7 @@ type Engine struct {
 
 	index         *visIndex
 	retentionUnit time.Duration
+	tlGauges      taskListGauges
 	scope         tally.Scope
 }
 

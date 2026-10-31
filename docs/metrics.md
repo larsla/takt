@@ -16,9 +16,15 @@ takt uses the metric names Cadence uses, with `takt` in place of `cadence` as th
 | `takt_workflow_success`, `_failed`, `_timeout`, `_cancel`, `_terminate`, `_continued_as_new` | counter | `domain`, `workflowtype` | Runs closed, by close status |
 | `takt_history_count` | histogram | `domain`, `workflowtype` | History length of closed runs, in events |
 | `takt_decision_timeout` | counter | `domain`, `workflowtype` | Decision tasks that timed out |
+| `takt_decision_failed` | counter | `domain`, `workflowtype`, `cause` | Decision tasks a worker failed, for example because no worker on the task list registered the workflow type |
 | `takt_activity_timeout` | counter | `domain`, `workflowtype`, `timeout_type` | Activity timeouts |
 | `takt_task_requests`, `takt_task_errors` | counter | `domain`, `operation` | Timer and transfer tasks processed, and those that failed and will be retried |
 | `takt_task_latency` | histogram | `domain`, `operation` | Time to process a timer or transfer task |
+| `takt_tasklist_backlog` | gauge | `domain`, `tasklist`, `tasklisttype` | Task stubs waiting on the task list. Stale stubs (of tasks that timed out or were canceled) count until a poller drops them |
+| `takt_tasklist_backlog_age_seconds` | gauge | `domain`, `tasklist`, `tasklisttype` | Age of the oldest waiting stub. Alert when it grows: nobody serves the task list |
+| `takt_tasklist_pollers` | gauge | `domain`, `tasklist`, `tasklisttype` | Workers that polled the task list in the last minute |
+
+Every server reports the task list gauges every 15 seconds, with the same values, so aggregate them with `max`, not `sum`. Sticky and session task lists are left out. A task list with `takt_tasklist_backlog_age_seconds` rising and `takt_tasklist_pollers` at 0 has no worker.
 
 The `operation` of timer and transfer tasks uses Cadence's names: `TimerActiveTaskUserTimer`, `TimerActiveTaskActivityTimeout`, `TimerActiveTaskActivityRetryTimer`, `TimerActiveTaskDecisionTimeout`, `TimerActiveTaskDecisionBackoffTimer`, `TimerActiveTaskWorkflowTimeout`, `TimerActiveTaskWorkflowBackoffTimer`, `TransferActiveTaskStartChildExecution`, `TransferActiveTaskSignalExecution`, `TransferActiveTaskCancelExecution` and `TransferActiveTaskCloseExecution`.
 

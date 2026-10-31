@@ -210,6 +210,9 @@ type PendingDecisionState string
 const (
 	PendingDecisionStateScheduled PendingDecisionState = "SCHEDULED"
 	PendingDecisionStateStarted   PendingDecisionState = "STARTED"
+	// PendingDecisionStateBackoff (takt only): the next attempt of a
+	// failing decision task waits for its backoff.
+	PendingDecisionStateBackoff PendingDecisionState = "BACKOFF"
 )
 
 type HistoryEventFilterType string

@@ -167,6 +167,14 @@ templ WorkflowSummary(w Workflow) {
 				}
 			}
 		}
+		if w.DecisionFailure != "" {
+			@ui.Card() {
+				@ui.CardHeader("Decision tasks are failing", "The run makes no progress until a worker can run it.")
+				@ui.CardContent() {
+					<pre class="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs text-destructive">{ w.DecisionFailure }</pre>
+				}
+			}
+		}
 		if w.Decision != "" {
 			<p class="text-sm text-muted-foreground">Decision task { w.Decision }.</p>
 		}

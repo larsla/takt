@@ -131,6 +131,7 @@ func (t *tx) completeDecision(d *DecisionInfo, req *api.RespondDecisionTaskCompl
 	t.add(ev)
 	s.Decision = nil
 	s.DecisionAttempt = 0
+	s.LastDecisionFailure = nil
 	s.LastDecisionStartedID = d.StartedID
 	if sa := req.StickyAttributes; sa != nil && sa.WorkerTaskList != nil && sa.WorkerTaskList.Name != "" {
 		s.StickyTaskList, s.StickyTimeout = sa.WorkerTaskList.Name, sa.ScheduleToStartTimeoutSeconds
@@ -195,6 +196,7 @@ func (t *tx) failDecision(d *DecisionInfo, cause api.DecisionTaskFailedCause, de
 	}
 	t.add(ev)
 	t.s.Decision = nil
+	t.s.LastDecisionFailure = &DecisionFailure{Cause: string(cause), Details: details, Identity: identity, Time: t.now}
 	t.flushBuffered()
 	t.retryDecision()
 }
@@ -210,6 +212,7 @@ func (t *tx) timeoutDecision(d *DecisionInfo) {
 	}
 	t.add(ev)
 	t.s.Decision = nil
+	t.s.LastDecisionFailure = &DecisionFailure{Cause: "TIMEOUT", Time: t.now}
 	t.flushBuffered()
 	t.retryDecision()
 }

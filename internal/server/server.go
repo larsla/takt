@@ -39,6 +39,9 @@ type Config struct {
 	MaxConcurrent int
 	// Metrics receives server and engine metrics. Defaults to tally.NoopScope.
 	Metrics tally.Scope
+	// TaskListMetricsInterval is how often the task list gauges are
+	// updated. Defaults to 15s.
+	TaskListMetricsInterval time.Duration
 }
 
 // Server is a running takt server.
@@ -77,6 +80,9 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.Metrics == nil {
 		cfg.Metrics = tally.NoopScope
 	}
+	if cfg.TaskListMetricsInterval == 0 {
+		cfg.TaskListMetricsInterval = 15 * time.Second
+	}
 	ecfg := cfg.Engine
 	ecfg.NC, ecfg.JS, ecfg.Logger, ecfg.Metrics = cfg.NC, cfg.JS, cfg.Logger, cfg.Metrics
 	e, err := engine.New(ctx, ecfg)
@@ -104,6 +110,11 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	s.wg.Go(func() { s.every(cfg.SweepInterval, "sweep finalized interrupted commits", s.e.Sweep) })
 	s.wg.Go(func() { s.every(cfg.JanitorInterval, "janitor deleted runs past retention", s.e.PurgeExpired) })
+	s.wg.Go(func() {
+		s.every(cfg.TaskListMetricsInterval, "task list metrics", func(ctx context.Context) (int, error) {
+			return 0, s.e.ReportTaskLists(ctx)
+		})
+	})
 	return s, nil
 }
 

@@ -407,6 +407,15 @@ func (u *UI) loadWorkflow(ctx context.Context, domain, workflowID, runID string)
 		if d.Attempt > 0 {
 			wf.Decision += fmt.Sprintf(", attempt %d", d.Attempt+1)
 		}
+		if d.LastFailureCause != "" {
+			wf.DecisionFailure = d.LastFailureCause
+			if len(d.LastFailureDetails) > 0 {
+				wf.DecisionFailure += ": " + string(d.LastFailureDetails)
+			}
+			if d.LastFailureIdentity != "" {
+				wf.DecisionFailure += " (worker " + d.LastFailureIdentity + ")"
+			}
+		}
 	}
 	var first time.Time
 	for _, e := range events {

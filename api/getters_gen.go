@@ -4503,6 +4503,58 @@ func (v *PendingDecisionInfo) IsSetOriginalScheduledTimestamp() bool {
 	return v != nil && v.OriginalScheduledTimestamp != 0
 }
 
+// GetLastFailureCause returns v.LastFailureCause, or its zero value when v is nil.
+func (v *PendingDecisionInfo) GetLastFailureCause() (o string) {
+	if v != nil {
+		o = v.LastFailureCause
+	}
+	return
+}
+
+// IsSetLastFailureCause reports whether v.LastFailureCause is set to a non-zero value.
+func (v *PendingDecisionInfo) IsSetLastFailureCause() bool {
+	return v != nil && v.LastFailureCause != ""
+}
+
+// GetLastFailureDetails returns v.LastFailureDetails, or its zero value when v is nil.
+func (v *PendingDecisionInfo) GetLastFailureDetails() (o []byte) {
+	if v != nil {
+		o = v.LastFailureDetails
+	}
+	return
+}
+
+// IsSetLastFailureDetails reports whether v.LastFailureDetails is set to a non-zero value.
+func (v *PendingDecisionInfo) IsSetLastFailureDetails() bool {
+	return v != nil && len(v.LastFailureDetails) > 0
+}
+
+// GetLastFailureIdentity returns v.LastFailureIdentity, or its zero value when v is nil.
+func (v *PendingDecisionInfo) GetLastFailureIdentity() (o string) {
+	if v != nil {
+		o = v.LastFailureIdentity
+	}
+	return
+}
+
+// IsSetLastFailureIdentity reports whether v.LastFailureIdentity is set to a non-zero value.
+func (v *PendingDecisionInfo) IsSetLastFailureIdentity() bool {
+	return v != nil && v.LastFailureIdentity != ""
+}
+
+// GetLastFailureTimestamp returns v.LastFailureTimestamp, or its zero value when v is nil.
+func (v *PendingDecisionInfo) GetLastFailureTimestamp() (o int64) {
+	if v != nil {
+		o = v.LastFailureTimestamp
+	}
+	return
+}
+
+// IsSetLastFailureTimestamp reports whether v.LastFailureTimestamp is set to a non-zero value.
+func (v *PendingDecisionInfo) IsSetLastFailureTimestamp() bool {
+	return v != nil && v.LastFailureTimestamp != 0
+}
+
 // GetDomain returns v.Domain, or its zero value when v is nil.
 func (v *PollForActivityTaskRequest) GetDomain() (o string) {
 	if v != nil {

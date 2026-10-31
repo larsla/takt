@@ -284,6 +284,7 @@ const (
 	PendingActivityStateCancelRequested                        = api.PendingActivityStateCancelRequested
 	PendingActivityStateScheduled                              = api.PendingActivityStateScheduled
 	PendingActivityStateStarted                                = api.PendingActivityStateStarted
+	PendingDecisionStateBackoff                                = api.PendingDecisionStateBackoff
 	PendingDecisionStateScheduled                              = api.PendingDecisionStateScheduled
 	PendingDecisionStateStarted                                = api.PendingDecisionStateStarted
 	QueryConsistencyLevelEventual                              = api.QueryConsistencyLevelEventual
